@@ -1,0 +1,4 @@
+# source-image [registry-repository:tag]
+# If the destination is omitted, the source name is used below REGISTRY_HOST.
+docker.io/library/nginx:1.27
+# quay.io/example/application:v1.0.0 my-team/application:v1.0.0

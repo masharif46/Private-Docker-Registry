@@ -1,0 +1,6 @@
+# Optional production reverse proxy. Point DNS at this host and use:
+# docker compose -f docker-compose.yml -f deploy/docker-compose.caddy.yml up -d
+{$REGISTRY_HOST} {
+  reverse_proxy registry:5000
+}
+

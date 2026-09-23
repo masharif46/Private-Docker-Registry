@@ -1,0 +1,17 @@
+.env
+.env.aws-s3
+.env.linode-s3
+harbor/
+# Keep the retired generic S3 profile ignored so old credentials cannot be committed.
+.env.s3
+backups/
+
+# Generated registry credentials and certificates.
+registry/auth/
+registry/certs/
+
+# Local logs and editor/OS files.
+*.log
+.DS_Store
+.idea/
+.vscode/

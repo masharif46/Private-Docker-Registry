@@ -1,0 +1,11 @@
+[Unit]
+Description=Back up the private Docker registry
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+# Change this path to the directory where the repository is installed.
+WorkingDirectory=/opt/Private-Docker-Registry
+ExecStart=/opt/Private-Docker-Registry/scripts/backup-registry.sh
+

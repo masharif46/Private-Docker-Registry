@@ -1,0 +1,53 @@
+# Production alternative to the root docker-compose.yml. Caddy obtains and
+# renews a trusted Let's Encrypt certificate automatically.
+services:
+  registry:
+    image: registry:3.1.1
+    container_name: private-docker-registry
+    restart: unless-stopped
+    environment:
+      REGISTRY_HTTP_ADDR: 0.0.0.0:5000
+      REGISTRY_HTTP_SECRET: ${REGISTRY_HTTP_SECRET:?Set REGISTRY_HTTP_SECRET in .env}
+      REGISTRY_AUTH: htpasswd
+      REGISTRY_AUTH_HTPASSWD_REALM: Registry Realm
+      REGISTRY_AUTH_HTPASSWD_PATH: /auth/htpasswd
+      REGISTRY_STORAGE_DELETE_ENABLED: "true"
+      REGISTRY_HTTP_DEBUG_ADDR: 0.0.0.0:5001
+      REGISTRY_HEALTH_STORAGEDRIVER_ENABLED: "true"
+      REGISTRY_HEALTH_STORAGEDRIVER_INTERVAL: 10s
+      REGISTRY_HEALTH_STORAGEDRIVER_THRESHOLD: "3"
+    volumes:
+      - registry-data:/var/lib/registry
+      - ../registry/auth:/auth:ro
+    expose:
+      - "5000"
+      - "5001"
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:5001/debug/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  caddy:
+    image: caddy:2.11.4-alpine
+    container_name: private-registry-caddy
+    restart: unless-stopped
+    environment:
+      REGISTRY_HOST: ${REGISTRY_HOST:?Set REGISTRY_HOST in .env}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      registry:
+        condition: service_healthy
+
+volumes:
+  registry-data:
+    name: private-docker-registry-data
+  caddy-data:
+  caddy-config:

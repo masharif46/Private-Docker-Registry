@@ -1,0 +1,17 @@
+# Optional Prometheus monitoring. The registry metrics endpoint is enabled by .env.
+services:
+  prometheus:
+    image: prom/prometheus:v3.13.3
+    container_name: private-registry-prometheus
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    depends_on:
+      registry:
+        condition: service_healthy
+
+volumes:
+  prometheus-data:
