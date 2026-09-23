@@ -260,6 +260,42 @@ docker pull harbor.example.com:8443/team/app:v1
 
 `registry login` never logs in to Harbor, and Harbor login never logs in to the lightweight API registry.
 
+### Logging in from another computer
+
+`registry login` works from a remote workstation or server as long as that computer has this repository’s scripts, a local `.env` configured for the remote registry, and network access to the registry. The hostname must resolve to the remote server—not to `127.0.0.1` or a local `/etc/hosts` entry left over from testing:
+
+```env
+REGISTRY_HOST=registry.example.com
+REGISTRY_PORT=443
+REGISTRY_USERNAME=registry-admin
+REGISTRY_PASSWORD=use-the-remote-registry-password
+```
+
+The remote server must allow the configured HTTPS port through its firewall. Test connectivity before login:
+
+```bash
+getent hosts registry.example.com
+curl -kI https://registry.example.com/v2/
+registry login
+```
+
+The unauthenticated API request normally returns `401`, which confirms that the remote registry is reachable and requesting authentication. For a trusted public certificate, no extra Docker certificate step is required. For a self-signed certificate, copy the remote registry CA certificate to the local Docker trust directory:
+
+```bash
+sudo mkdir -p /etc/docker/certs.d/registry.example.com
+sudo cp registry.crt /etc/docker/certs.d/registry.example.com/ca.crt
+sudo systemctl restart docker
+registry login
+```
+
+If the remote registry uses a non-standard port, include it in `REGISTRY_HOST` as `registry.example.com:5443` and set `REGISTRY_PORT=5443`; Docker certificate directories must also include the port. Harbor remains a separate target:
+
+```bash
+docker login harbor.example.com:8443
+```
+
+Never copy a local `127.0.0.1` hosts entry to a remote client unless the registry is actually running on that client. Do not commit the remote `.env` file or passwords to Git.
+
 List source images in [`images.txt`](images.txt). Use one image per line; comments and blank lines are ignored:
 
 ```text
