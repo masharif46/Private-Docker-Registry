@@ -223,11 +223,42 @@ For Kubernetes, install the same CA certificate on every node/container runtime 
 
 ## Login and push images
 
-Log in from a Docker client:
+There are two independent login targets when Harbor is installed:
+
+| Command | Login target | Credentials |
+| --- | --- | --- |
+| `registry login` | Lightweight API registry at `REGISTRY_HOST` from `.env` | `REGISTRY_USERNAME` and `REGISTRY_PASSWORD` from `.env` |
+| `docker login harbor.example.com:8443` | Harbor GUI registry | Harbor account from `harbor/harbor-credentials.txt` or a Harbor-created user |
+
+Log in to the lightweight API registry:
 
 ```bash
-./scripts/registry.sh login
+registry login
+# Equivalent explicit Docker command:
+docker login registry.example.com
 ```
+
+Log in to Harbor separately:
+
+```bash
+docker login harbor.example.com:8443
+```
+
+Harbor’s self-signed lab certificate must be trusted by Docker before this command. For production, use a trusted certificate. Logging out is also separate:
+
+```bash
+registry logout
+docker logout harbor.example.com:8443
+```
+
+Image references must include the registry that contains the image:
+
+```bash
+docker pull registry.example.com/team/app:v1
+docker pull harbor.example.com:8443/team/app:v1
+```
+
+`registry login` never logs in to Harbor, and Harbor login never logs in to the lightweight API registry.
 
 List source images in [`images.txt`](images.txt). Use one image per line; comments and blank lines are ignored:
 
@@ -350,8 +381,10 @@ registry user add developer
 registry user password developer
 registry user remove developer --confirm
 
-registry login
-registry logout
+registry login                         # Lightweight API registry
+registry logout                        # Lightweight API registry
+docker login harbor.example.com:8443   # Harbor GUI registry
+docker logout harbor.example.com:8443
 
 registry migrate check user@new-vps
 registry migrate plan user@new-vps /opt/Private-Docker-Registry
