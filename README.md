@@ -74,6 +74,7 @@ Edit `.env` and set:
 
 ```dotenv
 REGISTRY_HOST=registry.example.com
+REGISTRY_BIND_ADDRESS=0.0.0.0
 REGISTRY_PORT=443
 REGISTRY_USERNAME=registry-admin
 REGISTRY_PASSWORD=use-a-long-random-password
@@ -84,7 +85,7 @@ PROMETHEUS_PORT=9090
 REGISTRY_BACKUP_SCHEDULE="0 2 * * *"
 ```
 
-`REGISTRY_HOST`, `REGISTRY_PORT`, `REGISTRY_USERNAME`, `REGISTRY_PASSWORD`, and `REGISTRY_HTTP_SECRET` are required for the default deployment. `PROMETHEUS_PORT` is used by the optional monitoring Compose profile, and `REGISTRY_BACKUP_SCHEDULE` is used by `registry backup schedule install`. Keep the password and HTTP secret long, random, and different from each other.
+`REGISTRY_HOST`, `REGISTRY_BIND_ADDRESS`, `REGISTRY_PORT`, `REGISTRY_USERNAME`, `REGISTRY_PASSWORD`, and `REGISTRY_HTTP_SECRET` are required for the default deployment. `PROMETHEUS_PORT` is used by the optional monitoring Compose profile, and `REGISTRY_BACKUP_SCHEDULE` is used by `registry backup schedule install`. Keep the password and HTTP secret long, random, and different from each other.
 
 The hostname must resolve from Docker clients and Kubernetes nodes. For a local test server, add an entry such as this on each client:
 
@@ -699,6 +700,48 @@ Garbage collection must run while the registry is stopped. The default is a dry 
 ```
 
 ## TLS, reverse proxy, and firewall
+
+### Host Nginx reverse proxy
+
+For a host-Nginx deployment, keep the Registry API private and let Nginx own public ports `80` and `443`. The repository provides [`deploy/nginx/registry.conf.example`](deploy/nginx/registry.conf.example), which supports Docker Registry uploads, long-running pulls, and the required forwarded headers:
+
+```text
+127.0.0.1:5001 -> private-docker-registry:5000
+registry.example.com:443 -> host Nginx -> 127.0.0.1:5001
+```
+
+Set the backend binding in `.env`:
+
+```dotenv
+REGISTRY_HOST=registry.example.com
+REGISTRY_BIND_ADDRESS=127.0.0.1
+REGISTRY_PORT=5001
+```
+
+Install a certificate and key readable by Nginx, edit the example’s `server_name` and certificate paths, then install and validate it without replacing unrelated Nginx sites:
+
+```bash
+sudo install -d -m 755 /etc/nginx/ssl
+sudo install -o root -g root -m 644 registry/certs/registry.crt /etc/nginx/ssl/registry.crt
+sudo install -o root -g root -m 600 registry/certs/registry.key /etc/nginx/ssl/registry.key
+sudo install -o root -g root -m 644 deploy/nginx/registry.conf.example \
+  /etc/nginx/conf.d/private-registry.conf
+
+# Replace registry.example.com in the installed file with REGISTRY_HOST.
+sudo nginx -t
+sudo systemctl reload nginx
+docker compose --env-file .env up -d
+```
+
+For production, use a trusted certificate such as `/etc/letsencrypt/live/registry.example.com/fullchain.pem` and its matching private key. The registry container still uses its local TLS certificate for the private Nginx-to-registry hop; `proxy_ssl_verify off` in the example is limited to that local hop. Verify the result:
+
+```bash
+sudo ss -ltnp | grep -E ':(443|5001)\b'
+curl -kI https://registry.example.com/v2/
+registry login
+```
+
+Port `5001` must show `127.0.0.1`, never `0.0.0.0`. Do not expose the backend port through the firewall. Harbor remains separate on its configured HTTPS port, for example `harbor.example.com:8443`.
 
 For production, use the optional Caddy deployment for a trusted Let's Encrypt certificate. Caddy generates and renews the certificate automatically; do not run `openssl req` to create the production certificate. Before starting it:
 
