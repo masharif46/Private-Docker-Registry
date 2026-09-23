@@ -390,6 +390,32 @@ Read-only operations are the default. Image deletion, user removal, restore over
 
 Global options may be placed before the command: `--env-file FILE`, `--registry HOST`, `--json`, `--quiet`, `--dry-run`, `--confirm`, and `--help`. Some subcommands also accept their confirmation or dry-run flags after the resource arguments for readability. The `registry` alias is intended for interactive administration; scripts and systemd should call the project scripts directly.
 
+### Login troubleshooting after logout
+
+The login helper reads `REGISTRY_USERNAME` and `REGISTRY_PASSWORD` from `.env`. Those values must match the users in `registry/auth/htpasswd`. If the password was changed only in one place, Docker may first report an HTTPS `401 Unauthorized` and then show a misleading fallback error such as `http://registry.example.com/v2/` on port `80`.
+
+Verify the endpoint and authentication without printing the password:
+
+```bash
+grep -E '^(REGISTRY_HOST|REGISTRY_PORT|REGISTRY_USERNAME)=' .env
+curl -kI https://registry.example.com/v2/
+registry logout
+registry login
+registry health
+```
+
+The unauthenticated `curl` request should return `401`; `registry login` should then succeed with the `.env` credentials. If the password must be changed, update the registry account interactively and then update the matching `.env` value before logging in again:
+
+```bash
+registry user password registry-admin
+# Edit .env and set REGISTRY_PASSWORD to the same new password.
+registry restart
+registry logout
+registry login
+```
+
+Never put a password directly on a command line or commit `.env` or `registry/auth/htpasswd` to Git.
+
 ## Optional shell aliases
 
 Aliases are convenient for interactive terminal use. They are not required by the scripts and should not be used as dependencies for systemd or automation. Install them explicitly; the installer appends a marked block once and preserves existing shell configuration:
