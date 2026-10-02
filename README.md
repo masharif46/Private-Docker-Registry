@@ -185,6 +185,20 @@ For the Docker Hub pull-through cache, use its separate installer after the main
 ./scripts/install-dockerhub-cache.sh --help
 ```
 
+Authentication is enabled by default. For a cache reachable only through a private local GitLab Runner network, you may explicitly disable cache-client authentication:
+
+```bash
+./scripts/install-dockerhub-cache.sh --up --no-auth
+```
+
+With `--no-auth`, clients do not run `docker login` against the cache. This mode is not appropriate for a public hostname or an untrusted network. Re-enable authentication with:
+
+```bash
+./scripts/install-dockerhub-cache.sh --up --auth
+```
+
+The selected authentication mode is saved in `dockerhub-cache/.env` and reused on later runs. No separate cache installer is required.
+
 The cache installer is safe to rerun: when `dockerhub-cache/.env` already exists, it reuses the saved hostname, port, and optional Docker Hub credentials without asking the same questions again. It also reuses existing cache access credentials from `dockerhub-cache/auth/htpasswd`. Edit `dockerhub-cache/.env` manually when changing the cache hostname, backend port, or upstream Docker Hub credentials. The installer does not remove the API registry, Harbor, or cache volume. Configure host Nginx and TLS separately using the instructions in [Separate Docker Hub pull-through cache](#separate-docker-hub-pull-through-cache).
 
 ### Uninstalling safely
@@ -714,13 +728,13 @@ The cache uses `127.0.0.1:5002` as its backend and does not change the writable 
 ./scripts/install-dockerhub-cache.sh --up
 ```
 
-The installer asks for the cache hostname, backend port, optional Docker Hub credentials, and a local cache-reader username/password. It writes private runtime files under `dockerhub-cache/`, which are ignored by Git. Docker Hub credentials are optional and should be limited to the upstream access required by your builds.
+With authentication enabled, the installer asks for the cache hostname, backend port, optional Docker Hub credentials, and a local cache-reader username/password. With `--no-auth`, no cache-reader password is required. It writes private runtime files under `dockerhub-cache/`, which are ignored by Git. Docker Hub credentials are optional and should be limited to the upstream access required by your builds.
 
-The cache-reader credentials are saved in `dockerhub-cache/credentials.txt` with mode `600`; protect this file and use it for `docker login` from clients. Do not commit it.
+When authentication is enabled, cache-reader credentials are saved in `dockerhub-cache/credentials.txt` with mode `600`; protect this file and use it for `docker login` from clients. No client password is required in `--no-auth` mode. Do not commit credential files or upstream tokens.
 
-#### Manage Docker Hub cache users
+#### Manage Docker Hub cache users (authenticated mode)
 
-Cache users are local Basic Authentication users and are separate from API-registry and Harbor users. Create or update a cache user with an interactive hidden password prompt:
+Cache users are local Basic Authentication users and are separate from API-registry and Harbor users. These commands apply only when authentication is enabled. Create or update a cache user with an interactive hidden password prompt:
 
 ```bash
 docker run --rm -it \
@@ -802,7 +816,7 @@ The first pull fetches the image from Docker Hub; later pulls can use the local 
 
 #### Kubernetes workloads using the cache
 
-Create a pull secret in the namespace where the workload will run:
+When cache authentication is enabled, create a pull secret in the namespace where the workload will run:
 
 ```bash
 kubectl create secret docker-registry dockerhub-cache \
@@ -827,9 +841,11 @@ spec:
 
 The first pull retrieves the base image from Docker Hub through the cache. Kubernetes nodes must trust the cache TLS certificate. Nodes using containerd or CRI-O need a runtime-specific registry-mirror configuration; Docker's `/etc/docker/daemon.json` does not configure them.
 
+When the cache was installed with `--no-auth` on a private trusted network, omit `imagePullSecrets`; Kubernetes can pull the cache image without credentials. Do not use passwordless mode on a public or shared network.
+
 #### GitLab CI/CD using the cache
 
-Store `DOCKERHUB_CACHE_USERNAME` and `DOCKERHUB_CACHE_PASSWORD` as protected GitLab CI/CD variables. Use the cache for Docker Hub base images, and push the finished private image to the GitLab registry, API registry, or Harbor:
+When authentication is enabled, store `DOCKERHUB_CACHE_USERNAME` and `DOCKERHUB_CACHE_PASSWORD` as protected GitLab CI/CD variables. Remove the cache `docker login` line when the cache was installed with `--no-auth`. Use the cache for Docker Hub base images, and push the finished private image to the GitLab registry, API registry, or Harbor:
 
 ```yaml
 stages:

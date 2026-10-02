@@ -8,13 +8,14 @@ ENV_FILE="${ENV_FILE:-$CACHE_DIR/.env}"
 CREDENTIALS_FILE="$CACHE_DIR/credentials.txt"
 NGINX_TEMPLATE="$ROOT_DIR/deploy/dockerhub-cache/nginx.conf.example"
 NGINX_CONFIG_FILE="$CACHE_DIR/nginx.conf"
+AUTH_MODE_OVERRIDE=""
 
 die() { printf 'Error: %s\n' "$*" >&2; exit 1; }
 need_command() { command -v "$1" >/dev/null 2>&1 || die "Required command not found: $1"; }
 
 usage() {
   cat <<'USAGE'
-Usage: scripts/install-dockerhub-cache.sh [--check|--up]
+Usage: scripts/install-dockerhub-cache.sh [--check|--up] [--auth|--no-auth]
 
 Creates a separate Docker Hub pull-through cache:
   container: private-dockerhub-cache
@@ -22,15 +23,22 @@ Creates a separate Docker Hub pull-through cache:
   backend:   127.0.0.1:5002
 
 The installer never changes or removes the existing API registry or Harbor.
+Authentication is enabled by default. Use --no-auth only on a private trusted
+network, such as a local GitLab Runner network; never expose that endpoint
+publicly.
 USAGE
 }
 
-ACTION="${1:---check}"
-case "$ACTION" in
-  --check|--up) ;;
-  --help|-h) usage; exit 0 ;;
-  *) die "Unknown option: $ACTION" ;;
-esac
+ACTION=--check
+for argument in "$@"; do
+  case "$argument" in
+    --check|--up) ACTION="$argument" ;;
+    --auth) AUTH_MODE_OVERRIDE=true ;;
+    --no-auth) AUTH_MODE_OVERRIDE=false ;;
+    --help|-h) usage; exit 0 ;;
+    *) die "Unknown option: $argument" ;;
+  esac
+done
 
 need_command docker
 need_command openssl
@@ -51,6 +59,10 @@ load_or_prompt() {
   DOCKERHUB_CACHE_PORT="${DOCKERHUB_CACHE_PORT:-5002}"
   DOCKERHUB_USERNAME="${DOCKERHUB_USERNAME:-}"
   DOCKERHUB_PASSWORD="${DOCKERHUB_PASSWORD:-}"
+  CACHE_AUTH_ENABLED="${CACHE_AUTH_ENABLED:-true}"
+  if [[ -n "$AUTH_MODE_OVERRIDE" ]]; then
+    CACHE_AUTH_ENABLED="$AUTH_MODE_OVERRIDE"
+  fi
   if [[ -t 0 ]]; then
     if (( env_was_present == 0 )) || [[ -z "$DOCKERHUB_CACHE_HOST" ]]; then
       read -r -p "Cache hostname [${DOCKERHUB_CACHE_HOST:-dockerhub-cache.example.com}]: " entered_host
@@ -80,6 +92,7 @@ DOCKERHUB_CACHE_HOST=$DOCKERHUB_CACHE_HOST
 DOCKERHUB_CACHE_PORT=$DOCKERHUB_CACHE_PORT
 DOCKERHUB_USERNAME=$DOCKERHUB_USERNAME
 DOCKERHUB_PASSWORD=$DOCKERHUB_PASSWORD
+CACHE_AUTH_ENABLED=$CACHE_AUTH_ENABLED
 EOF
   chmod 600 "$ENV_FILE"
 }
@@ -98,13 +111,12 @@ http:
   addr: 0.0.0.0:5000
   debug:
     addr: 0.0.0.0:5001
-auth:
-  htpasswd:
-    realm: Docker Hub Cache
-    path: /auth/htpasswd
 proxy:
   remoteurl: https://registry-1.docker.io
 EOF
+  if [[ "$CACHE_AUTH_ENABLED" == true ]]; then
+    sed -i '/^proxy:/i auth:\n  htpasswd:\n    realm: Docker Hub Cache\n    path: \/auth\/htpasswd' "$CACHE_DIR/config.yml"
+  fi
   if [[ -n "$DOCKERHUB_USERNAME" ]]; then
     cat >> "$CACHE_DIR/config.yml" <<EOF
   username: $DOCKERHUB_USERNAME
@@ -120,6 +132,7 @@ write_nginx_config() {
 }
 
 write_auth() {
+  [[ "$CACHE_AUTH_ENABLED" == true ]] || return 0
   if [[ ! -s "$CACHE_DIR/auth/htpasswd" ]]; then
     [[ -n "${CACHE_USERNAME:-}" && -n "${CACHE_PASSWORD:-}" ]] || {
       if [[ -t 0 ]]; then
@@ -152,6 +165,7 @@ write_auth
 docker compose --env-file "$ENV_FILE" -f "$CACHE_COMPOSE" config -q
 printf 'Docker Hub cache configuration is valid.\n'
 printf 'Container: private-dockerhub-cache\nBackend: 127.0.0.1:%s\nHostname: %s\n' "$DOCKERHUB_CACHE_PORT" "$DOCKERHUB_CACHE_HOST"
+printf 'Authentication: %s\n' "$([[ "$CACHE_AUTH_ENABLED" == true ]] && printf enabled || printf disabled)"
 printf 'Generated Nginx config: %s\n' "$NGINX_CONFIG_FILE"
 printf 'Tracked Nginx template: %s\n' "$NGINX_TEMPLATE"
 
