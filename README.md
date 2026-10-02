@@ -70,22 +70,33 @@ cp .env.example .env
 chmod 600 .env
 ```
 
-Edit `.env` and set:
+Edit `.env` and set the registry hostname, credentials, and binding mode:
 
 ```dotenv
 REGISTRY_HOST=registry.example.com
-REGISTRY_BIND_ADDRESS=0.0.0.0
-REGISTRY_PORT=443
 REGISTRY_USERNAME=registry-admin
 REGISTRY_PASSWORD=use-a-long-random-password
 REGISTRY_HTTP_SECRET=use-a-different-long-random-secret
+
+# Recommended when host Nginx or Caddy owns public HTTPS 443:
+REGISTRY_BIND_ADDRESS=127.0.0.1
+REGISTRY_PORT=5001
+
+# Use this only when the registry is exposed directly, without a host proxy:
+# REGISTRY_BIND_ADDRESS=0.0.0.0
+# REGISTRY_PORT=443
+
+# Optional direct self-signed CA for registry CLI/API checks:
+# REGISTRY_CA_FILE=registry/certs/registry.crt
 
 # Optional monitoring and backup scheduling settings:
 PROMETHEUS_PORT=9090
 REGISTRY_BACKUP_SCHEDULE="0 2 * * *"
 ```
 
-`REGISTRY_HOST`, `REGISTRY_BIND_ADDRESS`, `REGISTRY_PORT`, `REGISTRY_USERNAME`, `REGISTRY_PASSWORD`, and `REGISTRY_HTTP_SECRET` are required for the default deployment. `PROMETHEUS_PORT` is used by the optional monitoring Compose profile, and `REGISTRY_BACKUP_SCHEDULE` is used by `registry backup schedule install`. Keep the password and HTTP secret long, random, and different from each other.
+Required variables are `REGISTRY_HOST`, `REGISTRY_BIND_ADDRESS`, `REGISTRY_PORT`, `REGISTRY_USERNAME`, `REGISTRY_PASSWORD`, and `REGISTRY_HTTP_SECRET`. Keep the password and HTTP secret long, random, and different from each other. `REGISTRY_CA_FILE` is optional and is normally left unset when host Nginx or Caddy provides a trusted public certificate. `PROMETHEUS_PORT` is used by the optional monitoring Compose profile, and `REGISTRY_BACKUP_SCHEDULE` is used by `registry backup schedule install`.
+
+Use exactly one exposure model: with host Nginx/Caddy, keep the registry on `127.0.0.1:5001` and proxy public HTTPS `443` to it; without a reverse proxy, bind directly to the public port. Do not bind the internal registry backend to `0.0.0.0:5001` when a host reverse proxy is used, and do not expose both models at the same time.
 
 The hostname must resolve from Docker clients and Kubernetes nodes. For a local test server, add an entry such as this on each client:
 
@@ -185,6 +196,25 @@ Installing Harbor does **not** convert the existing API registry and does not ma
 | Harbor GUI registry | `https://harbor.example.com:8443` | Separate Harbor database, projects, storage, users, RBAC, and image catalog |
 
 The actual hostnames and ports come from the installer and `.env` configuration. On the same server, the two deployments must use different hostnames or ports. Logging into Harbor will **not** automatically show images previously pushed to the API registry, and API-registry users are not automatically created in Harbor. The installer deliberately does not perform a bulk migration, overwrite the existing registry, or delete its images.
+
+Treat the deployments as separate systems in daily operations:
+
+| Operation | API registry | Harbor GUI | Docker Hub cache |
+| --- | --- | --- | --- |
+| Login command | `registry login` or `docker login registry.example.com` | `docker login harbor.example.com:8443` | `docker login dockerhub-cache.example.com` |
+| Image source | Your private application registry | Your private Harbor projects | Cached Docker Hub pulls |
+| Authentication | Basic-auth users from `registry/auth/htpasswd` | Harbor users, projects, and RBAC | Cache-reader basic-auth user |
+| Persistent data | `private-docker-registry-data` | Harbor data directory and named volumes | `private-dockerhub-cache-data` |
+
+The `registry` command uses the API registry hostname and credentials from `.env`; it does not log in to Harbor. Harbor administration and Harbor project permissions are managed through the Harbor web portal or Harbor API. The Docker Hub cache is a third endpoint for upstream pulls and should not be used as the destination for private application images.
+
+Use the hostname that matches the image reference. For example, these are three different image locations even when they run on the same server:
+
+```bash
+docker pull registry.example.com/team/app:v1
+docker pull harbor.example.com:8443/team/app:v1
+docker pull dockerhub-cache.example.com/library/nginx:1.27
+```
 
 #### Safe migration to Harbor
 
@@ -498,6 +528,32 @@ registry image verify team/application:v1
 `registry doctor` checks Docker, Compose configuration, DNS, the configured registry port, TLS files, authentication, the registry volume, free local disk space, and authenticated/unauthenticated API connectivity. S3 checks validate the Compose profile and endpoint reachability without uploading a permanent test object. Firewall checks are dry-run by default and verify active/configured SSH ports before any apply operation.
 
 Read-only operations are the default. Image deletion, user removal, restore overlays, migration runs, TLS renewal, retention deletion, firewall changes, and garbage collection require explicit confirmation flags. If an image digest is shared by multiple tags, image deletion additionally requires `--force-shared`; deleting a manifest does not immediately reclaim blobs until garbage collection runs while the registry is stopped. Basic authentication applies to the whole registry and cannot provide repository-level permissions; use Harbor or an external token service for detailed RBAC.
+
+### Create, change, and remove API-registry users
+
+The lightweight API registry stores Basic Authentication users in `registry/auth/htpasswd`. Use the `registry` command from the project directory; passwords are entered through a hidden prompt and are never accepted as command-line arguments:
+
+```bash
+# List existing API-registry users.
+registry user list
+
+# Create a user, or replace that user's password if the username already exists.
+registry user add developer
+
+# Change an existing user's password.
+registry user password developer
+
+# Reload the authentication file without recreating the volume or images.
+registry restart
+
+# Remove a user; --confirm is mandatory.
+registry user remove developer --confirm
+registry restart
+```
+
+After adding or changing a user, restart the API registry before testing the new credentials. Removing a user invalidates that account for future logins but does not remove images or repositories. Keep at least one administrative account, and update `.env` if you change the credentials used by `registry login`.
+
+These commands manage only the lightweight API registry. Harbor users are managed in the Harbor web portal under Administration, and Docker Hub cache credentials are managed separately in `dockerhub-cache/credentials.txt` and its `htpasswd` file.
 
 Global options may be placed before the command: `--env-file FILE`, `--registry HOST`, `--json`, `--quiet`, `--dry-run`, `--confirm`, and `--help`. Some subcommands also accept their confirmation or dry-run flags after the resource arguments for readability. The `registry` alias is intended for interactive administration; scripts and systemd should call the project scripts directly.
 
