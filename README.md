@@ -486,6 +486,16 @@ registry login
 
 Never put a password directly on a command line or commit `.env` or `registry/auth/htpasswd` to Git.
 
+If user-management commands report `Permission denied` for `registry/auth/htpasswd`, the file was likely recreated by `root`. Restore ownership to the repository administrator while keeping the hash private:
+
+```bash
+sudo chown "$USER:$USER" registry/auth/htpasswd
+sudo chmod 600 registry/auth/htpasswd
+registry user list
+```
+
+Do not make the file world-readable. The registry container can continue reading the file through its read-only bind mount.
+
 ## Optional shell aliases
 
 Aliases are convenient for interactive terminal use. They are not required by the scripts and should not be used as dependencies for systemd or automation. Install them explicitly; the installer appends a marked block once and preserves existing shell configuration:
