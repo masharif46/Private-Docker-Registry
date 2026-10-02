@@ -885,6 +885,40 @@ For Docker Engine’s global Docker Hub mirror behavior, configure each Docker h
 }
 ```
 
+For a Docker Engine and cache running on the same host, a local mirror can use the backend directly:
+
+```bash
+sudo tee /etc/docker/daemon.json >/dev/null <<'EOF'
+{
+  "userland-proxy": true,
+  "registry-mirrors": [
+    "http://127.0.0.1:5002"
+  ]
+}
+EOF
+
+sudo python3 -m json.tool /etc/docker/daemon.json
+sudo systemctl restart docker
+sudo systemctl --no-pager --full status docker
+sudo docker info --format 'Registry mirrors: {{json .RegistryConfig.Mirrors}}'
+```
+
+If Docker Hub credentials are required, they belong in the cache's upstream configuration. They allow the cache to authenticate to Docker Hub; they are not the credentials GitLab Runner uses to access the cache. Store them in the private `dockerhub-cache/.env` file, not tracked YAML:
+
+```dotenv
+DOCKERHUB_USERNAME=your_dockerhub_username
+DOCKERHUB_PASSWORD=your_dockerhub_access_token
+```
+
+Then regenerate and start the cache configuration:
+
+```bash
+./scripts/install-dockerhub-cache.sh --check
+./scripts/install-dockerhub-cache.sh --up
+```
+
+The cache has separate reader credentials for clients when authentication is enabled. Keep those distinct, and do not place either password or token in Git. The cache must also be reachable from the GitLab Runner host; configuring upstream Docker Hub credentials alone does not make the runner use it.
+
 Then restart Docker. Kubernetes nodes using containerd or CRI-O require their own registry-mirror configuration; Docker’s `daemon.json` does not configure those runtimes. See the [Docker pull-through cache documentation](https://docs.docker.com/docker-hub/image-library/mirror/) for daemon mirror behavior.
 
 ### Bidirectional API-registry and Harbor migration
