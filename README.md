@@ -1,8 +1,10 @@
 # Private Docker Registry
 
-A self-hosted CNCF Distribution Registry 3 for Docker and Kubernetes images. The public configuration uses `registry.example.com` as a placeholder. Replace it with your own hostname in the local `.env` file; do not commit that file.
+A self-hosted private container-registry platform for Docker and Kubernetes images. Its lightweight API deployment uses CNCF Distribution Registry 3, with optional Harbor GUI support for projects, RBAC, scanning, and replication, plus an independent Docker Hub pull-through cache for upstream base images.
 
-The repository provides a secure-by-default local deployment plus optional production components for backups, VPS migration, Amazon S3 or Linode Object Storage, TLS termination, monitoring, retention, garbage collection, firewall rules, and image signing.
+All public hostnames in tracked documentation are safe placeholders, such as `registry.example.com`, `harbor.example.com`, and `dockerhub-cache.example.com`. Replace them with your real DNS names in the local `.env`, installer prompts, Nginx configuration, and Docker client configuration. Never commit `.env`, generated credentials, private keys, or runtime authentication files.
+
+The repository provides a secure-by-default deployment plus optional production components for backups, VPS migration, Amazon S3 or Linode Object Storage, TLS termination, monitoring, retention, garbage collection, firewall rules, image signing, Harbor GUI management, and Docker Hub caching. The API registry, Harbor, and Docker Hub cache use separate storage and authentication; installing one does not automatically import images or users from another.
 
 ## Requirements
 
@@ -10,10 +12,15 @@ The repository provides a secure-by-default local deployment plus optional produ
 
 | Use case | CPU | Memory | Storage | Network |
 | --- | ---: | ---: | --- | --- |
-| Development or small lab | 2 vCPU | 4 GB RAM | 20 GB+ SSD | 100 Mbps+ |
+| Lightweight API registry only | 2 vCPU | 4 GB RAM | 20 GB+ SSD | 100 Mbps+ |
+| API registry plus Docker Hub cache | 2–4 vCPU | 4–8 GB RAM | 50 GB+ SSD, sized for cached base images and backups | 100 Mbps+ |
+| Harbor GUI only or side-by-side with API registry | 4 vCPU | 8 GB RAM | 160 GB+ SSD recommended | 1 Gbps preferred |
+| Full stack: API registry, Harbor, and Docker Hub cache | 6–8 vCPU | 12–16 GB RAM | 200 GB+ SSD, sized for all image stores and backups | 1 Gbps preferred |
 | Production starting point | 4 vCPU | 8 GB RAM | SSD sized for all layers plus backups | 1 Gbps preferred |
 
-The registry is storage-bound rather than CPU-bound. Size storage for the complete compressed image set, at least one local backup, temporary restore/maintenance space, and future growth. Keeping approximately 2x the current registry data size free is a practical starting point for backup, restore, and garbage-collection operations. This workstation currently uses approximately 3.1 GB for registry data, so its requirement will increase as more Kubernetes images are pushed.
+The registries are storage-bound rather than CPU-bound. Size storage for the complete compressed image set, Docker Hub cache growth, at least one local backup, temporary restore/maintenance space, and future growth. Keeping approximately 2x the current registry data size free is a practical starting point for backup, restore, and garbage-collection operations. This workstation currently uses approximately 3.1 GB for registry data; the requirement will increase as more Kubernetes images are pushed or Docker Hub base images are cached.
+
+The Docker Hub cache has low CPU and memory overhead, but its storage is not fixed: every distinct upstream image layer pulled through the cache can remain in the cache volume. Monitor disk usage and reserve additional space before enabling it for many Kubernetes nodes. Harbor runs several services, including its database, Redis, job service, registry, portal, and optional Trivy scanner, so it needs materially more resources than the lightweight registry.
 
 ### Operating system and runtime
 
