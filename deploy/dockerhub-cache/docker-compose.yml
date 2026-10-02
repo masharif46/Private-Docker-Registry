@@ -1,0 +1,23 @@
+services:
+  cache:
+    image: registry:3.1.1
+    container_name: private-dockerhub-cache
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${DOCKERHUB_CACHE_PORT:-5002}:5000"
+    environment:
+      REGISTRY_CONFIGURATION_PATH: /etc/distribution/config.yml
+    volumes:
+      - dockerhub-cache-data:/var/lib/registry
+      - ./config.yml:/etc/distribution/config.yml:ro
+      - ./auth:/auth:ro
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:5001/debug/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  dockerhub-cache-data:
+    name: private-dockerhub-cache-data

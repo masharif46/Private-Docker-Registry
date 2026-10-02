@@ -1,0 +1,44 @@
+# Host Nginx reverse proxy for the Docker Hub pull-through cache.
+# Replace dockerhub-cache.example.com and certificate paths before enabling.
+
+upstream dockerhub_cache_backend {
+    server 127.0.0.1:5002;
+    keepalive 32;
+}
+
+server {
+    listen 80;
+    server_name dockerhub-cache.example.com;
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    http2 on;
+    server_name dockerhub-cache.example.com;
+
+    ssl_certificate     /etc/nginx/ssl/dockerhub-cache.crt;
+    ssl_certificate_key /etc/nginx/ssl/dockerhub-cache.key;
+    ssl_protocols TLSv1.2 TLSv1.3;
+
+    client_max_body_size 0;
+    proxy_http_version 1.1;
+    proxy_request_buffering off;
+    proxy_buffering off;
+    proxy_read_timeout 900s;
+    proxy_send_timeout 900s;
+    proxy_ssl_verify off;
+    proxy_ssl_server_name on;
+    proxy_ssl_name dockerhub-cache.example.com;
+
+    proxy_set_header Host $http_host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto https;
+    proxy_set_header X-Forwarded-Host $host;
+    proxy_set_header Connection "";
+
+    location / {
+        proxy_pass http://dockerhub_cache_backend;
+    }
+}

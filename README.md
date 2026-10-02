@@ -359,6 +359,7 @@ Registry data is stored in the Docker volume `private-docker-registry-data`. `do
 | --- | --- | --- |
 | `scripts/registry.sh` | Unified registry administration CLI: lifecycle, doctor, repositories, images, backups, users, storage, TLS, monitoring, and maintenance | Read-only by default; destructive operations require explicit confirmation |
 | `scripts/install.sh` | Interactive API-only or protected side-by-side Harbor GUI installation | Harbor mode uses separate data/ports when an existing registry is detected and never migrates or deletes existing data |
+| `scripts/install-dockerhub-cache.sh` | Create an isolated Docker Hub pull-through cache | Uses `private-dockerhub-cache` and `private-dockerhub-cache-data`; never changes the API registry or Harbor |
 | `scripts/uninstall.sh` | Stop/remove API-only, Harbor, or both deployments | Preserves data by default; permanent removal requires `--purge-data --confirm` |
 | `scripts/push-images.sh` | Interactively push one image, push from arguments, or process an image list | Prints the destination reference and stops on the first failed image |
 | `scripts/backup-registry.sh` | Archive the registry volume and generate a SHA-256 checksum | Reads the volume without deleting or changing data |
@@ -416,6 +417,7 @@ registry backup schedule remove --confirm
 registry user list
 registry user add developer
 registry user password developer
+registry restart
 registry user remove developer --confirm
 
 registry login                         # Lightweight API registry
@@ -567,6 +569,45 @@ cd /opt/Private-Docker-Registry
 ```
 
 Protect backup archives because they contain image data. Protect `.env`, `registry/auth/`, and `registry/certs/` as secrets.
+
+### Separate Docker Hub pull-through cache
+
+Harbor is not required for a Docker Hub cache. The project includes `scripts/install-dockerhub-cache.sh`, which creates a separate Registry 3 cache with its own container, authentication file, and Docker volume:
+
+```text
+Docker Hub -> private-dockerhub-cache -> Docker/Kubernetes clients
+```
+
+The cache uses `127.0.0.1:5002` as its backend and does not change the writable API registry on `127.0.0.1:5001` or Harbor on `8443`:
+
+```bash
+./scripts/install-dockerhub-cache.sh --check
+./scripts/install-dockerhub-cache.sh --up
+```
+
+The installer asks for the cache hostname, backend port, optional Docker Hub credentials, and a local cache-reader username/password. It writes private runtime files under `dockerhub-cache/`, which are ignored by Git. Docker Hub credentials are optional and should be limited to the upstream access required by your builds.
+
+Before clients can use the cache, configure the host Nginx virtual host from [`deploy/dockerhub-cache/nginx.conf.example`](deploy/dockerhub-cache/nginx.conf.example), replace the hostname and certificate paths, and proxy the hostname to `127.0.0.1:5002`. Do not expose port `5002` publicly. The cache hostname must resolve to this server.
+
+Pull cached Docker Hub images through the cache hostname:
+
+```bash
+docker login dockerhub-cache.example.com
+docker pull dockerhub-cache.example.com/library/nginx:1.27
+docker pull dockerhub-cache.example.com/library/alpine:3.22
+```
+
+The first pull fetches the image from Docker Hub; later pulls can use the local cache. The cache is separate from the writable API registry and is intended for pulls, not private application-image pushes. Cache storage can grow over time, so monitor disk usage and plan retention/cleanup before production use. Pin important base images by digest.
+
+For Docker Engine’s global Docker Hub mirror behavior, configure each Docker host separately in `/etc/docker/daemon.json`:
+
+```json
+{
+  "registry-mirrors": ["https://dockerhub-cache.example.com"]
+}
+```
+
+Then restart Docker. Kubernetes nodes using containerd or CRI-O require their own registry-mirror configuration; Docker’s `daemon.json` does not configure those runtimes. See the [Docker pull-through cache documentation](https://docs.docker.com/docker-hub/image-library/mirror/) for daemon mirror behavior.
 
 ### Bidirectional API-registry and Harbor migration
 

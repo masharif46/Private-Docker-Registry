@@ -2,6 +2,7 @@
 .env.aws-s3
 .env.linode-s3
 harbor/
+/dockerhub-cache/
 # Keep the retired generic S3 profile ignored so old credentials cannot be committed.
 .env.s3
 backups/
