@@ -6,6 +6,33 @@ All public hostnames in tracked documentation are safe placeholders, such as `re
 
 The repository provides a secure-by-default deployment plus optional production components for backups, VPS migration, Amazon S3 or Linode Object Storage, TLS termination, monitoring, retention, garbage collection, firewall rules, image signing, Harbor GUI management, and Docker Hub caching. The API registry, Harbor, and Docker Hub cache use separate storage and authentication; installing one does not automatically import images or users from another.
 
+## Contents
+
+- [Requirements](#requirements)
+  - [Recommended server capacity](#recommended-server-capacity)
+  - [Operating system and runtime](#operating-system-and-runtime)
+  - [DNS, network, and ports](#dns-network-and-ports)
+- [Installation](#installation)
+  - [Installer usage](#installer-usage)
+  - [Uninstalling safely](#uninstalling-safely)
+  - [API registry and Harbor are separate registries](#important-api-registry-and-harbor-are-separate-registries)
+- [Pinned component versions](#pinned-component-versions)
+- [Trusting the development certificate](#trusting-the-development-certificate)
+- [Login and push images](#login-and-push-images)
+- [Kubernetes usage](#kubernetes-usage)
+- [Operations](#operations)
+- [Script reference](#script-reference)
+- [Unified registry command](#unified-registry-command)
+- [Backups and VPS migration](#backups-and-vps-migration)
+- [Docker Hub pull-through cache](#separate-docker-hub-pull-through-cache)
+- [API registry and Harbor migration](#bidirectional-api-registry-and-harbor-migration)
+- [Amazon S3 storage](#amazon-s3-storage)
+- [Linode Object Storage](#linode-object-storage)
+- [Cleanup and retention](#cleanup-and-retention)
+- [TLS, reverse proxy, and firewall](#tls-reverse-proxy-and-firewall)
+- [Monitoring and image signing](#monitoring-and-image-signing)
+- [GitHub and security](#github-and-security)
+
 ## Requirements
 
 ### Recommended server capacity
@@ -158,7 +185,7 @@ For the Docker Hub pull-through cache, use its separate installer after the main
 ./scripts/install-dockerhub-cache.sh --help
 ```
 
-The cache installer is safe to rerun: it reuses `dockerhub-cache/.env` and existing cache access credentials, and does not remove the API registry, Harbor, or cache volume. Configure host Nginx and TLS separately using the instructions in [Separate Docker Hub pull-through cache](#separate-docker-hub-pull-through-cache).
+The cache installer is safe to rerun: when `dockerhub-cache/.env` already exists, it reuses the saved hostname, port, and optional Docker Hub credentials without asking the same questions again. It also reuses existing cache access credentials from `dockerhub-cache/auth/htpasswd`. Edit `dockerhub-cache/.env` manually when changing the cache hostname, backend port, or upstream Docker Hub credentials. The installer does not remove the API registry, Harbor, or cache volume. Configure host Nginx and TLS separately using the instructions in [Separate Docker Hub pull-through cache](#separate-docker-hub-pull-through-cache).
 
 ### Uninstalling safely
 
@@ -691,6 +718,45 @@ The installer asks for the cache hostname, backend port, optional Docker Hub cre
 
 The cache-reader credentials are saved in `dockerhub-cache/credentials.txt` with mode `600`; protect this file and use it for `docker login` from clients. Do not commit it.
 
+#### Manage Docker Hub cache users
+
+Cache users are local Basic Authentication users and are separate from API-registry and Harbor users. Create or update a cache user with an interactive hidden password prompt:
+
+```bash
+docker run --rm -it \
+  --entrypoint htpasswd \
+  -v "$PWD/dockerhub-cache/auth:/auth" \
+  httpd:2-alpine \
+  -B /auth/htpasswd developer
+
+sudo chown "$USER:$USER" dockerhub-cache/auth/htpasswd
+sudo chmod 600 dockerhub-cache/auth/htpasswd
+docker compose \
+  --env-file dockerhub-cache/.env \
+  -f deploy/dockerhub-cache/docker-compose.yml \
+  restart
+```
+
+Test the new account with `docker login dockerhub-cache.example.com`. To remove a cache user, back up the authentication file first, then run:
+
+```bash
+cp dockerhub-cache/auth/htpasswd \
+  "dockerhub-cache/auth/htpasswd.$(date -u +%Y%m%dT%H%M%SZ).bak"
+docker run --rm \
+  --entrypoint htpasswd \
+  -v "$PWD/dockerhub-cache/auth:/auth" \
+  httpd:2-alpine \
+  -D /auth/htpasswd developer
+sudo chown "$USER:$USER" dockerhub-cache/auth/htpasswd
+sudo chmod 600 dockerhub-cache/auth/htpasswd
+docker compose \
+  --env-file dockerhub-cache/.env \
+  -f deploy/dockerhub-cache/docker-compose.yml \
+  restart
+```
+
+Removing a cache user does not delete cached images. Keep at least one working cache account, and never place cache passwords or Docker Hub upstream tokens directly in shell history.
+
 To stop the cache without deleting cached layers or credentials:
 
 ```bash
@@ -716,6 +782,67 @@ docker pull dockerhub-cache.example.com/library/alpine:3.22
 ```
 
 The first pull fetches the image from Docker Hub; later pulls can use the local cache. The cache is separate from the writable API registry and is intended for pulls, not private application-image pushes. Cache storage can grow over time, so monitor disk usage and plan retention/cleanup before production use. Pin important base images by digest.
+
+#### Kubernetes workloads using the cache
+
+Create a pull secret in the namespace where the workload will run:
+
+```bash
+kubectl create secret docker-registry dockerhub-cache \
+  --docker-server=dockerhub-cache.example.com \
+  --docker-username=cache-reader \
+  --docker-password='CACHE_PASSWORD' \
+  --namespace=my-app
+```
+
+Reference the cache hostname in the workload image and attach the secret:
+
+```yaml
+spec:
+  template:
+    spec:
+      imagePullSecrets:
+        - name: dockerhub-cache
+      containers:
+        - name: nginx
+          image: dockerhub-cache.example.com/library/nginx:1.27
+```
+
+The first pull retrieves the base image from Docker Hub through the cache. Kubernetes nodes must trust the cache TLS certificate. Nodes using containerd or CRI-O need a runtime-specific registry-mirror configuration; Docker's `/etc/docker/daemon.json` does not configure them.
+
+#### GitLab CI/CD using the cache
+
+Store `DOCKERHUB_CACHE_USERNAME` and `DOCKERHUB_CACHE_PASSWORD` as protected GitLab CI/CD variables. Use the cache for Docker Hub base images, and push the finished private image to the GitLab registry, API registry, or Harbor:
+
+```yaml
+stages:
+  - build
+
+variables:
+  DOCKER_HOST: tcp://docker:2375
+  DOCKER_TLS_CERTDIR: ""
+  CACHE_REGISTRY: dockerhub-cache.example.com
+  IMAGE_TAG: $CI_REGISTRY_IMAGE:$CI_COMMIT_SHA
+
+build-image:
+  image: docker:27
+  services:
+    - name: docker:27-dind
+      command: ["--tls=false"]
+  script:
+    - echo "$DOCKERHUB_CACHE_PASSWORD" | docker login "$CACHE_REGISTRY" --username "$DOCKERHUB_CACHE_USERNAME" --password-stdin
+    - echo "$CI_REGISTRY_PASSWORD" | docker login "$CI_REGISTRY" --username "$CI_REGISTRY_USER" --password-stdin
+    - docker build --pull -t "$IMAGE_TAG" .
+    - docker push "$IMAGE_TAG"
+```
+
+Set the Dockerfile base image to the cache hostname so Docker actually uses it:
+
+```dockerfile
+FROM dockerhub-cache.example.com/library/alpine:3.22
+```
+
+Do not push private application images to `dockerhub-cache.example.com`; it is a pull-through cache for upstream Docker Hub images, not the private application-image destination.
 
 For Docker Engine’s global Docker Hub mirror behavior, configure each Docker host separately in `/etc/docker/daemon.json`:
 

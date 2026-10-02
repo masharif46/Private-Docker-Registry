@@ -37,7 +37,9 @@ mkdir -p "$CACHE_DIR/auth"
 chmod 700 "$CACHE_DIR" "$CACHE_DIR/auth"
 
 load_or_prompt() {
+  local env_was_present=0
   if [[ -f "$ENV_FILE" ]]; then
+    env_was_present=1
     set -a
     # shellcheck disable=SC1090
     source "$ENV_FILE"
@@ -48,15 +50,21 @@ load_or_prompt() {
   DOCKERHUB_USERNAME="${DOCKERHUB_USERNAME:-}"
   DOCKERHUB_PASSWORD="${DOCKERHUB_PASSWORD:-}"
   if [[ -t 0 ]]; then
-    read -r -p "Cache hostname [dockerhub-cache.example.com]: " entered_host
-    DOCKERHUB_CACHE_HOST="${entered_host:-${DOCKERHUB_CACHE_HOST:-dockerhub-cache.example.com}}"
-    read -r -p "Cache backend port [${DOCKERHUB_CACHE_PORT}]: " entered_port
-    DOCKERHUB_CACHE_PORT="${entered_port:-$DOCKERHUB_CACHE_PORT}"
-    read -r -p "Docker Hub username (optional): " entered_user
-    DOCKERHUB_USERNAME="${entered_user:-$DOCKERHUB_USERNAME}"
-    if [[ -n "$DOCKERHUB_USERNAME" ]]; then
-      read -r -s -p 'Docker Hub password/token: ' entered_password; printf '\n'
-      DOCKERHUB_PASSWORD="${entered_password:-$DOCKERHUB_PASSWORD}"
+    if (( env_was_present == 0 )) || [[ -z "$DOCKERHUB_CACHE_HOST" ]]; then
+      read -r -p "Cache hostname [${DOCKERHUB_CACHE_HOST:-dockerhub-cache.example.com}]: " entered_host
+      DOCKERHUB_CACHE_HOST="${entered_host:-${DOCKERHUB_CACHE_HOST:-dockerhub-cache.example.com}}"
+    fi
+    if (( env_was_present == 0 )) || [[ -z "${DOCKERHUB_CACHE_PORT:-}" ]]; then
+      read -r -p "Cache backend port [${DOCKERHUB_CACHE_PORT:-5002}]: " entered_port
+      DOCKERHUB_CACHE_PORT="${entered_port:-${DOCKERHUB_CACHE_PORT:-5002}}"
+    fi
+    if (( env_was_present == 0 )); then
+      read -r -p 'Docker Hub username (optional): ' entered_user
+      DOCKERHUB_USERNAME="${entered_user:-$DOCKERHUB_USERNAME}"
+      if [[ -n "$DOCKERHUB_USERNAME" ]]; then
+        read -r -s -p 'Docker Hub password/token: ' entered_password; printf '\n'
+        DOCKERHUB_PASSWORD="${entered_password:-$DOCKERHUB_PASSWORD}"
+      fi
     fi
   fi
   [[ "$DOCKERHUB_CACHE_HOST" =~ ^[A-Za-z0-9.-]+$ ]] || die 'Cache hostname is invalid.'
