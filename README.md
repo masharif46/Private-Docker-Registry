@@ -117,6 +117,31 @@ Container names use clear prefixes for operations on hosts running many containe
 
 For non-interactive selection, use `./scripts/install.sh api-only` or `./scripts/install.sh harbor`. Harbor production installation requires an existing trusted certificate and private key; the installer can generate a self-signed certificate only for lab/testing. Harbor’s official installer and configuration remain authoritative for Harbor upgrades.
 
+### Installer usage
+
+The main installer supports an interactive choice or an explicit deployment mode:
+
+```bash
+./scripts/install.sh              # asks: API registry or Harbor GUI
+./scripts/install.sh api-only    # lightweight API registry
+./scripts/install.sh harbor      # Harbor GUI
+./scripts/install.sh --help
+```
+
+API mode initializes missing authentication/certificate files, starts the existing Compose deployment, and runs the registry doctor. It keeps existing `registry/auth/`, `registry/certs/`, and image-volume data when rerun.
+
+Harbor mode is separate from the API registry. If the API registry already exists, Harbor uses separate data, prefixed container names, and HTTPS port `8443` by default. It does not import API-registry images or users automatically, and it stops with an error if the Harbor directory already exists so an existing Harbor installation is not overwritten.
+
+For the Docker Hub pull-through cache, use its separate installer after the main deployment:
+
+```bash
+./scripts/install-dockerhub-cache.sh --check  # generate/validate configuration only
+./scripts/install-dockerhub-cache.sh --up     # validate and start the cache
+./scripts/install-dockerhub-cache.sh --help
+```
+
+The cache installer is safe to rerun: it reuses `dockerhub-cache/.env` and existing cache access credentials, and does not remove the API registry, Harbor, or cache volume. Configure host Nginx and TLS separately using the instructions in [Separate Docker Hub pull-through cache](#separate-docker-hub-pull-through-cache).
+
 ### Uninstalling safely
 
 To stop and remove registry containers while preserving image data, credentials, certificates, Harbor files, and Docker volumes, run one of these commands:
@@ -124,17 +149,31 @@ To stop and remove registry containers while preserving image data, credentials,
 ```bash
 ./scripts/uninstall.sh api
 ./scripts/uninstall.sh harbor
+./scripts/uninstall.sh cache
 ./scripts/uninstall.sh all
+./scripts/uninstall.sh --help
 ```
 
-The uninstall script never purges data by default. Permanent removal is a separate, explicit operation and requires both flags:
+`cache` stops/removes only the Docker Hub cache container. It preserves cached layers, `dockerhub-cache/` credentials and configuration, and host Nginx/TLS files. `all` includes the API registry, Harbor, and Docker Hub cache. The uninstall script never purges data by default. Permanent removal is a separate, explicit operation and requires both flags:
 
 ```bash
 ./scripts/uninstall.sh harbor --purge-data --confirm
 ./scripts/uninstall.sh api --purge-data --confirm
+./scripts/uninstall.sh cache --purge-data --confirm
 ```
 
-Review the exact target and keep a verified backup before using purge mode. Do not use Docker commands such as `docker compose down -v` manually unless you intentionally want to remove persistent volumes.
+Review the exact target and keep a verified backup before using purge mode. Cache purge removes cached layers and the local `dockerhub-cache/` runtime files, but intentionally leaves host Nginx/TLS files for manual review. Do not use Docker commands such as `docker compose down -v` manually unless you intentionally want to remove persistent volumes.
+
+Uninstall usage summary:
+
+| Command | Effect | Data behavior |
+| --- | --- | --- |
+| `./scripts/uninstall.sh api` | Stops/removes the lightweight registry container | Preserves registry images and configuration |
+| `./scripts/uninstall.sh harbor` | Stops/removes Harbor containers | Preserves Harbor data and installation files |
+| `./scripts/uninstall.sh cache` | Stops/removes the Docker Hub cache container | Preserves cached layers, credentials, and configuration |
+| `./scripts/uninstall.sh all` | Applies the safe stop/remove operation to all three deployments | Preserves all persistent data |
+
+The uninstall script does not remove host Nginx virtual hosts, TLS certificates, DNS entries, or Docker client login credentials. Review those separately before reusing a hostname. To reinstall a stopped deployment, run the corresponding installer or Compose start command; preserved volumes and runtime files remain available.
 
 ### Important: API registry and Harbor are separate registries
 
@@ -360,7 +399,7 @@ Registry data is stored in the Docker volume `private-docker-registry-data`. `do
 | `scripts/registry.sh` | Unified registry administration CLI: lifecycle, doctor, repositories, images, backups, users, storage, TLS, monitoring, and maintenance | Read-only by default; destructive operations require explicit confirmation |
 | `scripts/install.sh` | Interactive API-only or protected side-by-side Harbor GUI installation | Harbor mode uses separate data/ports when an existing registry is detected and never migrates or deletes existing data |
 | `scripts/install-dockerhub-cache.sh` | Create an isolated Docker Hub pull-through cache | Uses `private-dockerhub-cache` and `private-dockerhub-cache-data`; never changes the API registry or Harbor |
-| `scripts/uninstall.sh` | Stop/remove API-only, Harbor, or both deployments | Preserves data by default; permanent removal requires `--purge-data --confirm` |
+| `scripts/uninstall.sh` | Stop/remove API-only, Harbor, Docker Hub cache, or all deployments | Preserves data by default; permanent removal requires `--purge-data --confirm` |
 | `scripts/push-images.sh` | Interactively push one image, push from arguments, or process an image list | Prints the destination reference and stops on the first failed image |
 | `scripts/backup-registry.sh` | Archive the registry volume and generate a SHA-256 checksum | Reads the volume without deleting or changing data |
 | `scripts/backup-schedule.sh` | Install, inspect, or remove the local cron backup schedule | Schedule removal requires `--confirm`; existing backups are preserved |
@@ -588,6 +627,20 @@ The cache uses `127.0.0.1:5002` as its backend and does not change the writable 
 The installer asks for the cache hostname, backend port, optional Docker Hub credentials, and a local cache-reader username/password. It writes private runtime files under `dockerhub-cache/`, which are ignored by Git. Docker Hub credentials are optional and should be limited to the upstream access required by your builds.
 
 The cache-reader credentials are saved in `dockerhub-cache/credentials.txt` with mode `600`; protect this file and use it for `docker login` from clients. Do not commit it.
+
+To stop the cache without deleting cached layers or credentials:
+
+```bash
+./scripts/uninstall.sh cache
+```
+
+To permanently remove the cache volume and local runtime files, only after verifying that the cache is no longer needed:
+
+```bash
+./scripts/uninstall.sh cache --purge-data --confirm
+```
+
+The uninstall command does not remove the host Nginx virtual host or TLS files automatically. This prevents an unrelated proxy configuration from being deleted; review those files separately if the cache hostname will never be reused.
 
 Before clients can use the cache, configure the host Nginx virtual host from [`deploy/dockerhub-cache/nginx.conf.example`](deploy/dockerhub-cache/nginx.conf.example), replace the hostname and certificate paths, and proxy the hostname to `127.0.0.1:5002`. Do not expose port `5002` publicly. The cache hostname must resolve to this server.
 

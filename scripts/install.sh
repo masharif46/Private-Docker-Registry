@@ -129,6 +129,21 @@ install_harbor_gui() {
 need docker
 docker compose version >/dev/null 2>&1 || die 'Docker Compose v2 plugin is required.'
 
+usage() {
+  cat <<'USAGE'
+Usage: scripts/install.sh [api-only|api|harbor|gui]
+
+Without an argument, asks whether to install the lightweight API registry or
+the Harbor GUI deployment. Existing API registry data is preserved; Harbor is
+installed side-by-side when an existing API registry is detected.
+USAGE
+}
+
+if [[ "${1:-}" == --help || "${1:-}" == -h ]]; then
+  usage
+  exit 0
+fi
+
 mode="${1:-}"
 if [[ -z "$mode" ]]; then
   printf '%s\n' 'Choose registry deployment:'
