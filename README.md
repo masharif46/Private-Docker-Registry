@@ -710,6 +710,26 @@ For a host-Nginx deployment, keep the Registry API private and let Nginx own pub
 registry.example.com:443 -> host Nginx -> 127.0.0.1:5001
 ```
 
+The installed live virtual host is `/etc/nginx/conf.d/private-registry.conf`. It is generated from the repository template with the real hostname and is intentionally outside Git. Inspect the exact active configuration with:
+
+```bash
+sudo sed -n '1,240p' /etc/nginx/conf.d/private-registry.conf
+sudo nginx -T | less
+```
+
+Confirm that Nginx has loaded the registry server block:
+
+```bash
+sudo nginx -T 2>/dev/null | grep -A35 -B5 \
+  'server_name registry.example.com'
+```
+
+The repository template remains generic so the real production hostname is not committed:
+
+```bash
+sed -n '1,240p' deploy/nginx/registry.conf.example
+```
+
 Set the backend binding in `.env`:
 
 ```dotenv
