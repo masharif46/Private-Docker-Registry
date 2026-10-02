@@ -771,7 +771,7 @@ To permanently remove the cache volume and local runtime files, only after verif
 
 The uninstall command does not remove the host Nginx virtual host or TLS files automatically. This prevents an unrelated proxy configuration from being deleted; review those files separately if the cache hostname will never be reused.
 
-Before clients can use the cache, configure the host Nginx virtual host from [`deploy/dockerhub-cache/nginx.conf.example`](deploy/dockerhub-cache/nginx.conf.example), replace the hostname and certificate paths, and proxy the hostname to `127.0.0.1:5002`. Do not expose port `5002` publicly. The cache hostname must resolve to this server.
+Before clients can use the cache, manually install and configure the host Nginx virtual host from [`deploy/dockerhub-cache/nginx.conf.example`](deploy/dockerhub-cache/nginx.conf.example). The cache installer does not create a `/etc/nginx/sites-enabled/` symlink or modify host Nginx. Replace the hostname and certificate paths, proxy the hostname to `127.0.0.1:5002`, validate with `sudo nginx -t`, and reload with `sudo systemctl reload nginx`. Do not expose port `5002` publicly. The cache hostname must resolve to this server.
 
 Pull cached Docker Hub images through the cache hostname:
 
@@ -1006,7 +1006,16 @@ For a host-Nginx deployment, keep the Registry API private and let Nginx own pub
 registry.example.com:443 -> host Nginx -> 127.0.0.1:5001
 ```
 
-The installed live virtual host is `/etc/nginx/conf.d/private-registry.conf`. It is generated from the repository template with the real hostname and is intentionally outside Git. Inspect the exact active configuration with:
+The API and Docker Hub cache installers do **not** automatically create an Nginx server block, a `/etc/nginx/sites-enabled/` symlink, or modify unrelated Nginx sites. Install the required host configuration explicitly after reviewing the template. The live API virtual host should be `/etc/nginx/conf.d/private-registry.conf`; it is intentionally outside Git.
+
+Install the API virtual host from the template:
+
+```bash
+sudo install -o root -g root -m 644 deploy/nginx/registry.conf.example \
+  /etc/nginx/conf.d/private-registry.conf
+```
+
+Edit the installed file to replace `registry.example.com` and certificate paths before validating Nginx. Inspect the exact active configuration with:
 
 ```bash
 sudo sed -n '1,240p' /etc/nginx/conf.d/private-registry.conf
