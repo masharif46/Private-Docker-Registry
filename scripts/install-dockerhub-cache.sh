@@ -6,6 +6,8 @@ CACHE_DIR="$ROOT_DIR/dockerhub-cache"
 CACHE_COMPOSE="$ROOT_DIR/deploy/dockerhub-cache/docker-compose.yml"
 ENV_FILE="${ENV_FILE:-$CACHE_DIR/.env}"
 CREDENTIALS_FILE="$CACHE_DIR/credentials.txt"
+NGINX_TEMPLATE="$ROOT_DIR/deploy/dockerhub-cache/nginx.conf.example"
+NGINX_CONFIG_FILE="$CACHE_DIR/nginx.conf"
 
 die() { printf 'Error: %s\n' "$*" >&2; exit 1; }
 need_command() { command -v "$1" >/dev/null 2>&1 || die "Required command not found: $1"; }
@@ -111,6 +113,12 @@ EOF
   fi
 }
 
+write_nginx_config() {
+  sed "s/dockerhub-cache\.example\.com/$DOCKERHUB_CACHE_HOST/g" \
+    "$NGINX_TEMPLATE" > "$NGINX_CONFIG_FILE"
+  chmod 644 "$NGINX_CONFIG_FILE"
+}
+
 write_auth() {
   if [[ ! -s "$CACHE_DIR/auth/htpasswd" ]]; then
     [[ -n "${CACHE_USERNAME:-}" && -n "${CACHE_PASSWORD:-}" ]] || {
@@ -138,12 +146,14 @@ EOF
 load_or_prompt
 write_env
 write_config
+write_nginx_config
 write_auth
 
 docker compose --env-file "$ENV_FILE" -f "$CACHE_COMPOSE" config -q
 printf 'Docker Hub cache configuration is valid.\n'
 printf 'Container: private-dockerhub-cache\nBackend: 127.0.0.1:%s\nHostname: %s\n' "$DOCKERHUB_CACHE_PORT" "$DOCKERHUB_CACHE_HOST"
-printf 'Nginx template: deploy/dockerhub-cache/nginx.conf.example\n'
+printf 'Generated Nginx config: %s\n' "$NGINX_CONFIG_FILE"
+printf 'Tracked Nginx template: %s\n' "$NGINX_TEMPLATE"
 
 if [[ "$ACTION" == --up ]]; then
   docker compose --env-file "$ENV_FILE" -f "$CACHE_COMPOSE" up -d

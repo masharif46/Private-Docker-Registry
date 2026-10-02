@@ -771,7 +771,24 @@ To permanently remove the cache volume and local runtime files, only after verif
 
 The uninstall command does not remove the host Nginx virtual host or TLS files automatically. This prevents an unrelated proxy configuration from being deleted; review those files separately if the cache hostname will never be reused.
 
-Before clients can use the cache, manually install and configure the host Nginx virtual host from [`deploy/dockerhub-cache/nginx.conf.example`](deploy/dockerhub-cache/nginx.conf.example). The cache installer does not create a `/etc/nginx/sites-enabled/` symlink or modify host Nginx. Replace the hostname and certificate paths, proxy the hostname to `127.0.0.1:5002`, validate with `sudo nginx -t`, and reload with `sudo systemctl reload nginx`. Do not expose port `5002` publicly. The cache hostname must resolve to this server.
+Before clients can use the cache, manually install and configure the host Nginx virtual host. After the cache installer runs, it generates a hostname-specific file at `dockerhub-cache/nginx.conf`. The installer does not create a `/etc/nginx/sites-enabled/` symlink or modify host Nginx. Review the generated file and replace the certificate paths before installing it:
+
+```bash
+sudo install -o root -g root -m 644 \
+  dockerhub-cache/nginx.conf \
+  /etc/nginx/conf.d/private-dockerhub-cache.conf
+sudoedit /etc/nginx/conf.d/private-dockerhub-cache.conf
+grep -nE 'server_name|proxy_ssl_name|ssl_certificate' \
+  /etc/nginx/conf.d/private-dockerhub-cache.conf
+sudo nginx -t
+sudo ln -s /etc/nginx/sites-available/private-dockerhub-cache.conf /etc/nginx/sites-enabled/private-dockerhub-cache.conf
+
+sudo systemctl reload nginx
+```
+
+The cache proxy must forward to `127.0.0.1:5002`; do not expose port `5002` publicly. The cache hostname must resolve to this server.
+
+The tracked template remains available at [`deploy/dockerhub-cache/nginx.conf.example`](deploy/dockerhub-cache/nginx.conf.example). Rerunning the cache installer regenerates `dockerhub-cache/nginx.conf` from the current hostname; review and recopy it if the hostname changes.
 
 Pull cached Docker Hub images through the cache hostname:
 
@@ -1015,7 +1032,15 @@ sudo install -o root -g root -m 644 deploy/nginx/registry.conf.example \
   /etc/nginx/conf.d/private-registry.conf
 ```
 
-Edit the installed file to replace `registry.example.com` and certificate paths before validating Nginx. Inspect the exact active configuration with:
+Copying the file does **not** replace the placeholder hostname. Edit the installed file before validating Nginx and replace every `registry.example.com` occurrence, including `server_name` and `proxy_ssl_name`, with the real `REGISTRY_HOST`. Also replace the certificate and private-key paths with the files that actually exist on this server:
+
+```bash
+sudoedit /etc/nginx/conf.d/private-registry.conf
+grep -nE 'server_name|proxy_ssl_name|ssl_certificate' \
+  /etc/nginx/conf.d/private-registry.conf
+```
+
+Inspect the exact active configuration with:
 
 ```bash
 sudo sed -n '1,240p' /etc/nginx/conf.d/private-registry.conf
