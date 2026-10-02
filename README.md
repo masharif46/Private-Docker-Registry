@@ -587,6 +587,8 @@ The cache uses `127.0.0.1:5002` as its backend and does not change the writable 
 
 The installer asks for the cache hostname, backend port, optional Docker Hub credentials, and a local cache-reader username/password. It writes private runtime files under `dockerhub-cache/`, which are ignored by Git. Docker Hub credentials are optional and should be limited to the upstream access required by your builds.
 
+The cache-reader credentials are saved in `dockerhub-cache/credentials.txt` with mode `600`; protect this file and use it for `docker login` from clients. Do not commit it.
+
 Before clients can use the cache, configure the host Nginx virtual host from [`deploy/dockerhub-cache/nginx.conf.example`](deploy/dockerhub-cache/nginx.conf.example), replace the hostname and certificate paths, and proxy the hostname to `127.0.0.1:5002`. Do not expose port `5002` publicly. The cache hostname must resolve to this server.
 
 Pull cached Docker Hub images through the cache hostname:

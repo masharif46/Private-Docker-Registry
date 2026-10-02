@@ -5,6 +5,7 @@ ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 CACHE_DIR="$ROOT_DIR/dockerhub-cache"
 CACHE_COMPOSE="$ROOT_DIR/deploy/dockerhub-cache/docker-compose.yml"
 ENV_FILE="${ENV_FILE:-$CACHE_DIR/.env}"
+CREDENTIALS_FILE="$CACHE_DIR/credentials.txt"
 
 die() { printf 'Error: %s\n' "$*" >&2; exit 1; }
 need_command() { command -v "$1" >/dev/null 2>&1 || die "Required command not found: $1"; }
@@ -30,8 +31,8 @@ case "$ACTION" in
 esac
 
 need_command docker
-need_command docker-compose || true
 need_command openssl
+docker compose version >/dev/null 2>&1 || die 'Docker Compose v2 plugin is required: docker compose'
 mkdir -p "$CACHE_DIR/auth"
 chmod 700 "$CACHE_DIR" "$CACHE_DIR/auth"
 
@@ -116,6 +117,13 @@ write_auth() {
     docker run --rm --entrypoint htpasswd httpd:2-alpine -Bbn \
       "$CACHE_USERNAME" "$CACHE_PASSWORD" > "$CACHE_DIR/auth/htpasswd"
     chmod 600 "$CACHE_DIR/auth/htpasswd"
+    umask 077
+    cat > "$CREDENTIALS_FILE" <<EOF
+Cache hostname: $DOCKERHUB_CACHE_HOST
+Username: $CACHE_USERNAME
+Password: $CACHE_PASSWORD
+EOF
+    chmod 600 "$CREDENTIALS_FILE"
   fi
 }
 

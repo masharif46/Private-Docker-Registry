@@ -5,12 +5,10 @@ services:
     restart: unless-stopped
     ports:
       - "127.0.0.1:${DOCKERHUB_CACHE_PORT:-5002}:5000"
-    environment:
-      REGISTRY_CONFIGURATION_PATH: /etc/distribution/config.yml
     volumes:
       - dockerhub-cache-data:/var/lib/registry
-      - ./config.yml:/etc/distribution/config.yml:ro
-      - ./auth:/auth:ro
+      - ../../dockerhub-cache/config.yml:/etc/distribution/config.yml:ro
+      - ../../dockerhub-cache/auth:/auth:ro
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:5001/debug/health"]
       interval: 30s
