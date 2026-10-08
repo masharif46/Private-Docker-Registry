@@ -19,6 +19,7 @@ The repository provides a secure-by-default deployment plus optional production 
 - [Pinned component versions](#pinned-component-versions)
 - [Trusting the development certificate](#trusting-the-development-certificate)
 - [Login and push images](#login-and-push-images)
+- [BuildKit image builds](#buildkit-image-builds)
 - [Kubernetes usage](#kubernetes-usage)
 - [Operations](#operations)
 - [Script reference](#script-reference)
@@ -52,7 +53,7 @@ The Docker Hub cache has low CPU and memory overhead, but its storage is not fix
 ### Operating system and runtime
 
 - Linux server or workstation with a supported `amd64` or `arm64` Docker installation
-- Docker Engine with the Compose v2 plugin (`docker compose`); the tested environment uses Docker Engine 29.8.1 and Compose 5.5.1
+- Docker Engine with the Compose v2 plugin (`docker compose`) and BuildKit/buildx support; the tested environment uses Docker Engine 29.8.1, Compose 5.5.1, and buildx 0.37.1
 - A Docker daemon account with permission to run containers and manage the registry volume; `sudo` or root is required for firewall, system CA trust, and systemd installation steps
 - OpenSSL, GNU Coreutils (`date`, `df`, `install`, `sha256sum`), `tar`, `gzip`, `awk`, `sed`, and `ss`/iproute2
 - `curl` and `jq` for registry API, doctor, repository, image, and storage commands
@@ -199,6 +200,74 @@ With `--no-auth`, clients do not run `docker login` against the cache. This mode
 
 The selected authentication mode is saved in `dockerhub-cache/.env` and reused on later runs. No separate cache installer is required.
 
+### BuildKit setup
+
+Modern Docker Engine packages include BuildKit and the `docker buildx` CLI plugin. Verify the installation or create the project’s dedicated BuildKit builder:
+
+```bash
+./scripts/install-buildkit.sh --check
+./scripts/install-buildkit.sh --up
+```
+
+The `--up` command is safe to rerun. It creates or reuses a builder named `private-buildkit` and bootstraps its BuildKit container. Use `--builder NAME` for a different builder, or `--use` to select an existing builder. BuildKit builders are per Docker user, so run the setup as the same user that runs local builds or GitLab Runner jobs.
+
+BuildKit builds images; it does not replace the Docker Hub cache or the private registry:
+
+```bash
+docker buildx build \
+  --builder private-buildkit \
+  --tag registry.example.com/team/app:v1 \
+  --cache-from type=registry,ref=registry.example.com/team/app:buildcache \
+  --cache-to type=registry,ref=registry.example.com/team/app:buildcache,mode=max \
+  --push .
+```
+
+Use the Docker Hub cache for public base images in the Dockerfile:
+
+```dockerfile
+FROM dockerhub-cache.example.com/library/alpine:3.22
+```
+
+The final application image and optional BuildKit cache artifact belong in the private API registry or Harbor. The Docker Hub cache is for upstream base-image pulls and should not be used for private application-image pushes.
+
+#### Current BuildKit workflow
+
+The installed `private-buildkit` builder runs locally on this workstation inside Docker. It has no public hostname or exposed service port:
+
+```text
+Local Docker or GitLab Runner
+            |
+            v
+    private-buildkit (local)
+            |
+            +--> dockerhub-cache.example.com  # public base-image cache
+            |
+            +--> registry.example.com/        # final private images
+                 or harbor.example.com:8443/
+```
+
+BuildKit can also run remotely through a Docker context, SSH builder, or Kubernetes-backed builder. The installer supports those modes, but none is configured on this workstation; the default remains the local `private-buildkit` builder. Use a different builder name for each remote target:
+
+```bash
+# Existing Docker context or endpoint.
+./scripts/install-buildkit.sh --up \
+  --builder remote-docker \
+  --docker-context production
+
+# Remote Docker host through SSH.
+./scripts/install-buildkit.sh --up \
+  --builder remote-ssh \
+  --ssh builder@buildkit.example.com
+
+# Kubernetes-backed BuildKit builder.
+./scripts/install-buildkit.sh --up \
+  --builder remote-kubernetes \
+  --kubernetes-context production \
+  --kubernetes-namespace buildkit
+```
+
+Remote Docker and SSH modes require working Docker-context or SSH access. Kubernetes mode requires `kubectl`, a valid kubeconfig context, permission to create BuildKit resources in the namespace, and a cluster that can pull the BuildKit image. The script refuses to reuse an existing builder name with remote options; choose a new `--builder` name or remove the old builder deliberately.
+
 The cache installer is safe to rerun: when `dockerhub-cache/.env` already exists, it reuses the saved hostname, port, and optional Docker Hub credentials without asking the same questions again. It also reuses existing cache access credentials from `dockerhub-cache/auth/htpasswd`. Edit `dockerhub-cache/.env` manually when changing the cache hostname, backend port, or upstream Docker Hub credentials. The installer does not remove the API registry, Harbor, or cache volume. Configure host Nginx and TLS separately using the instructions in [Separate Docker Hub pull-through cache](#separate-docker-hub-pull-through-cache).
 
 ### Uninstalling safely
@@ -209,6 +278,7 @@ To stop and remove registry containers while preserving image data, credentials,
 ./scripts/uninstall.sh api
 ./scripts/uninstall.sh harbor
 ./scripts/uninstall.sh cache
+./scripts/uninstall.sh buildkit
 ./scripts/uninstall.sh all
 ./scripts/uninstall.sh --help
 ```
@@ -219,6 +289,7 @@ To stop and remove registry containers while preserving image data, credentials,
 ./scripts/uninstall.sh harbor --purge-data --confirm
 ./scripts/uninstall.sh api --purge-data --confirm
 ./scripts/uninstall.sh cache --purge-data --confirm
+./scripts/uninstall.sh buildkit --purge-data --confirm
 ```
 
 Review the exact target and keep a verified backup before using purge mode. Cache purge removes cached layers and the local `dockerhub-cache/` runtime files, but intentionally leaves host Nginx/TLS files for manual review. Do not use Docker commands such as `docker compose down -v` manually unless you intentionally want to remove persistent volumes.
@@ -230,9 +301,10 @@ Uninstall usage summary:
 | `./scripts/uninstall.sh api` | Stops/removes the lightweight registry container | Preserves registry images and configuration |
 | `./scripts/uninstall.sh harbor` | Stops/removes Harbor containers | Preserves Harbor data and installation files |
 | `./scripts/uninstall.sh cache` | Stops/removes the Docker Hub cache container | Preserves cached layers, credentials, and configuration |
-| `./scripts/uninstall.sh all` | Applies the safe stop/remove operation to all three deployments | Preserves all persistent data |
+| `./scripts/uninstall.sh buildkit` | Stops the dedicated BuildKit builder | Preserves the local BuildKit build cache |
+| `./scripts/uninstall.sh all` | Applies the safe stop/remove operation to API, Harbor, cache, and BuildKit | Preserves all persistent data and BuildKit cache |
 
-The uninstall script does not remove host Nginx virtual hosts, TLS certificates, DNS entries, or Docker client login credentials. Review those separately before reusing a hostname. To reinstall a stopped deployment, run the corresponding installer or Compose start command; preserved volumes and runtime files remain available.
+The uninstall script does not remove host Nginx virtual hosts, TLS certificates, DNS entries, Docker client login credentials, or BuildKit cache by default. Review those separately before reusing a hostname. To reinstall a stopped deployment, run the corresponding installer or Compose start command; preserved volumes and runtime files remain available.
 
 ### Important: API registry and Harbor are separate registries
 
@@ -477,6 +549,7 @@ Registry data is stored in the Docker volume `private-docker-registry-data`. `do
 | `scripts/registry.sh` | Unified registry administration CLI: lifecycle, doctor, repositories, images, backups, users, storage, TLS, monitoring, and maintenance | Read-only by default; destructive operations require explicit confirmation |
 | `scripts/install.sh` | Interactive API-only or protected side-by-side Harbor GUI installation | Harbor mode uses separate data/ports when an existing registry is detected and never migrates or deletes existing data |
 | `scripts/install-dockerhub-cache.sh` | Create an isolated Docker Hub pull-through cache | Uses `private-dockerhub-cache` and `private-dockerhub-cache-data`; never changes the API registry or Harbor |
+| `scripts/install-buildkit.sh` | Check BuildKit/buildx or create the dedicated `private-buildkit` builder | Idempotent; does not modify registry images, registry volumes, or Docker Hub cache data |
 | `scripts/uninstall.sh` | Stop/remove API-only, Harbor, Docker Hub cache, or all deployments | Preserves data by default; permanent removal requires `--purge-data --confirm` |
 | `scripts/push-images.sh` | Interactively push one image, push from arguments, or process an image list | Prints the destination reference and stops on the first failed image |
 | `scripts/backup-registry.sh` | Archive the registry volume and generate a SHA-256 checksum | Reads the volume without deleting or changing data |
@@ -841,7 +914,18 @@ spec:
 
 The first pull retrieves the base image from Docker Hub through the cache. Kubernetes nodes must trust the cache TLS certificate. Nodes using containerd or CRI-O need a runtime-specific registry-mirror configuration; Docker's `/etc/docker/daemon.json` does not configure them.
 
-When the cache was installed with `--no-auth` on a private trusted network, omit `imagePullSecrets`; Kubernetes can pull the cache image without credentials. Do not use passwordless mode on a public or shared network.
+When the cache was installed with `--no-auth` on a private trusted network, omit `imagePullSecrets`; Kubernetes can pull the cache image without credentials. Do not use passwordless mode on a public or shared network. dockerhub-cache.example.com is your Hostsname.
+
+
+On the GitLab Runner host, add this under the runner’s existing [runners.docker] section in /etc/gitlab-runner/config.toml:
+
+```bash
+ extra_hosts = ["dockerhub-cache.example.com:host-gateway"]
+```
+
+
+Docker maps host-gateway to an address containers can use to reach the host; GitLab Runner supports extra_hosts for Docker jobs. Docker documentation, GitLab Runner settings. The registry must listen on that reachable host interface.
+
 
 #### GitLab CI/CD using the cache
 

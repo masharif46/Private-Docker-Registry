@@ -8,16 +8,17 @@ CACHE_COMPOSE_FILE="$ROOT_DIR/deploy/dockerhub-cache/docker-compose.yml"
 CACHE_ENV_FILE="$CACHE_DIR/.env"
 CACHE_CONTAINER="private-dockerhub-cache"
 CACHE_VOLUME="private-dockerhub-cache-data"
+BUILDKIT_BUILDER="${BUILDKIT_BUILDER:-private-buildkit}"
 PURGE_DATA=0
 CONFIRM=0
 
 die() { printf 'Error: %s\n' "$*" >&2; exit 1; }
 usage() {
   cat <<'EOF'
-Usage: scripts/uninstall.sh {api|harbor|cache|all} [--purge-data --confirm]
+Usage: scripts/uninstall.sh {api|harbor|cache|buildkit|all} [--purge-data --confirm]
 
 Default behavior stops/removes containers but preserves registry images,
-Docker Hub cache layers, credentials, certificates, and Docker volumes.
+Docker Hub cache layers, BuildKit cache, credentials, certificates, and Docker volumes.
 EOF
 }
 
@@ -26,7 +27,7 @@ for argument in "$@"; do
     --purge-data) PURGE_DATA=1 ;;
     --confirm) CONFIRM=1 ;;
     -h|--help) usage; exit 0 ;;
-    api|harbor|cache|all) [[ -z "${TARGET:-}" ]] || die 'Choose only one target: api, harbor, cache, or all.'; TARGET="$argument" ;;
+    api|harbor|cache|buildkit|all) [[ -z "${TARGET:-}" ]] || die 'Choose only one target: api, harbor, cache, buildkit, or all.'; TARGET="$argument" ;;
     *) die "Unknown argument: $argument" ;;
   esac
 done
@@ -78,9 +79,26 @@ stop_cache() {
   fi
 }
 
+stop_buildkit() {
+  if ! docker buildx inspect "$BUILDKIT_BUILDER" >/dev/null 2>&1; then
+    printf 'BuildKit builder not found: %s\n' "$BUILDKIT_BUILDER"
+    return 0
+  fi
+
+  if (( PURGE_DATA == 1 )); then
+    docker buildx rm --force "$BUILDKIT_BUILDER"
+    printf 'Purged BuildKit builder and its local build cache: %s\n' "$BUILDKIT_BUILDER"
+  else
+    docker buildx stop "$BUILDKIT_BUILDER" >/dev/null 2>&1 || true
+    printf 'Stopped BuildKit builder and preserved its local build cache: %s\n' "$BUILDKIT_BUILDER"
+    printf 'Use --purge-data --confirm to remove the builder and its cache.\n'
+  fi
+}
+
 case "$TARGET" in
   api) stop_api ;;
   harbor) stop_harbor ;;
   cache) stop_cache ;;
-  all) stop_harbor; stop_cache; stop_api ;;
+  buildkit) stop_buildkit ;;
+  all) stop_harbor; stop_cache; stop_buildkit; stop_api ;;
 esac
