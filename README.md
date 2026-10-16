@@ -550,6 +550,7 @@ Registry data is stored in the Docker volume `private-docker-registry-data`. `do
 | `scripts/registry.sh` | Unified registry administration CLI: lifecycle, doctor, repositories, images, backups, users, storage, TLS, monitoring, and maintenance | Read-only by default; destructive operations require explicit confirmation |
 | `scripts/install.sh` | Interactive API-only or protected side-by-side Harbor GUI installation | Harbor mode uses separate data/ports when an existing registry is detected and never migrates or deletes existing data |
 | `scripts/install-dockerhub-cache.sh` | Create an isolated Docker Hub pull-through cache | Uses `private-dockerhub-cache` and `private-dockerhub-cache-data`; never changes the API registry or Harbor |
+| `scripts/dockerhub-cache.sh` | Manage Docker Hub cache lifecycle and authenticated users | Creates timestamped user-file backups before changes; user removal requires `--confirm` |
 | `scripts/install-buildkit.sh` | Check BuildKit/buildx or create the dedicated `private-buildkit` builder | Idempotent; does not modify registry images, registry volumes, or Docker Hub cache data |
 | `scripts/uninstall.sh` | Stop/remove API-only, Harbor, Docker Hub cache, or all deployments | Preserves data by default; permanent removal requires `--purge-data --confirm` |
 | `scripts/push-images.sh` | Interactively push one image, push from arguments, or process an image list | Prints the destination reference and stops on the first failed image |
@@ -808,63 +809,34 @@ When authentication is enabled, cache-reader credentials are saved in `dockerhub
 
 #### Manage Docker Hub cache users (authenticated mode)
 
-Cache users are local Basic Authentication users and are separate from API-registry and Harbor users. These steps apply only when cache authentication is enabled. Run them from the repository directory on the cache server. First back up the user file:
+Cache users are local Basic Authentication users and are separate from API-registry and Harbor users. These commands apply only when cache authentication is enabled. Run them from the repository directory on the cache server. The cache command backs up the user file automatically before changes.
 
 ```bash
-cp dockerhub-cache/auth/htpasswd \
-  "dockerhub-cache/auth/htpasswd.$(date -u +%Y%m%dT%H%M%SZ).bak"
+./scripts/dockerhub-cache.sh user list
 ```
 
-To **add** a user, replace `developer` with the username you want. The command prompts for a password without displaying it. Do not add `-c`; that would replace the file and remove existing users.
+To **add** a user, replace `developer` with the username you want. The command prompts twice for a password without displaying it:
 
 ```bash
-docker run --rm -it \
-  --entrypoint htpasswd \
-  -v "$PWD/dockerhub-cache/auth:/auth" \
-  httpd:2-alpine \
-  -B /auth/htpasswd developer
+./scripts/dockerhub-cache.sh user add developer
+./scripts/dockerhub-cache.sh restart
 ```
 
-To **change a user's password**, run the same command again with that existing username. Enter the new password at the prompt:
+To **change a user's password**, use the `password` action. It prompts twice for the new password:
 
 ```bash
-docker run --rm -it \
-  --entrypoint htpasswd \
-  -v "$PWD/dockerhub-cache/auth:/auth" \
-  httpd:2-alpine \
-  -B /auth/htpasswd developer
+./scripts/dockerhub-cache.sh user password developer
+./scripts/dockerhub-cache.sh restart
 ```
 
-After adding or changing the user, restore file permissions and restart the cache so it reloads the updated user file:
+To remove a user, require the explicit `--confirm` flag, then restart the cache:
 
 ```bash
-sudo chown "$USER:$USER" dockerhub-cache/auth/htpasswd
-sudo chmod 600 dockerhub-cache/auth/htpasswd
-docker compose \
-  --env-file dockerhub-cache/.env \
-  -f deploy/dockerhub-cache/docker-compose.yml \
-  restart
+./scripts/dockerhub-cache.sh user remove developer --confirm
+./scripts/dockerhub-cache.sh restart
 ```
 
-Test the account with `docker login dockerhub-cache.example.com`. If GitLab uses this account, set or update both `DOCKERHUB_CACHE_USERNAME` and `DOCKERHUB_CACHE_PASSWORD` in the GitLab project variables. Update any Kubernetes pull secrets if their credentials changed. Adding or changing users in `htpasswd` does not update `dockerhub-cache/credentials.txt`; that file only records the installer credentials, so update it securely if you use it as your password record.
-
-To remove a cache user, back up the authentication file first as above, then run:
-
-```bash
-cp dockerhub-cache/auth/htpasswd \
-  "dockerhub-cache/auth/htpasswd.$(date -u +%Y%m%dT%H%M%SZ).bak"
-docker run --rm \
-  --entrypoint htpasswd \
-  -v "$PWD/dockerhub-cache/auth:/auth" \
-  httpd:2-alpine \
-  -D /auth/htpasswd developer
-sudo chown "$USER:$USER" dockerhub-cache/auth/htpasswd
-sudo chmod 600 dockerhub-cache/auth/htpasswd
-docker compose \
-  --env-file dockerhub-cache/.env \
-  -f deploy/dockerhub-cache/docker-compose.yml \
-  restart
-```
+Test the account with `docker login dockerhub-cache.example.com`. If GitLab uses this account, set or update both `DOCKERHUB_CACHE_USERNAME` and `DOCKERHUB_CACHE_PASSWORD` in the GitLab project variables. Update any Kubernetes pull secrets if their credentials changed. Adding or changing users does not update `dockerhub-cache/credentials.txt`; that file only records the installer credentials, so update it securely if you use it as your password record.
 
 Removing a cache user does not delete cached images. Keep at least one working cache account, and never place cache passwords or Docker Hub upstream tokens directly in shell history.
 
