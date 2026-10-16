@@ -26,6 +26,7 @@ The repository provides a secure-by-default deployment plus optional production 
 - [Unified registry command](#unified-registry-command)
 - [Backups and VPS migration](#backups-and-vps-migration)
 - [Docker Hub pull-through cache](#separate-docker-hub-pull-through-cache)
+  - [GitLab CI/CD: credentials, BuildKit, and registry cache](#gitlab-cicd-credentials-buildkit-and-registry-cache)
 - [API registry and Harbor migration](#bidirectional-api-registry-and-harbor-migration)
 - [Amazon S3 storage](#amazon-s3-storage)
 - [Linode Object Storage](#linode-object-storage)
@@ -927,9 +928,49 @@ On the GitLab Runner host, add this under the runner’s existing [runners.docke
 Docker maps host-gateway to an address containers can use to reach the host; GitLab Runner supports extra_hosts for Docker jobs. Docker documentation, GitLab Runner settings. The registry must listen on that reachable host interface.
 
 
-#### GitLab CI/CD using the cache
+#### GitLab CI/CD: credentials, BuildKit, and registry cache
 
-When authentication is enabled, store `DOCKERHUB_CACHE_USERNAME` and `DOCKERHUB_CACHE_PASSWORD` as protected GitLab CI/CD variables. Remove the cache `docker login` line when the cache was installed with `--no-auth`. Use the cache for Docker Hub base images, and push the finished private image to the GitLab registry, API registry, or Harbor:
+Use this setup when your pipeline pushes images to this project's private registry:
+
+1. On the registry server, create a registry account for CI and choose its password when prompted:
+
+   ```bash
+   ./scripts/registry.sh user add ci-builder
+   ./scripts/registry.sh restart
+   ```
+
+   Keep the password; you will enter it in GitLab in the next step. For Harbor, create a Harbor robot account instead.
+2. In the GitLab project that contains the pipeline, open **Settings → CI/CD → Variables → Add variable**. Add the keys from the table below, one at a time. These are registry credentials, not your GitLab website username/password.
+3. For each password, select **Masked and hidden** (or **Masked** if hidden is unavailable). Use environment scope `*`. Enable **Protect variable** only when the pipeline runs on protected branches/tags; protected variables are unavailable to unprotected branch pipelines.
+4. The sample job logs in using these variables, then BuildKit pushes both the app image and its build cache to the private registry.
+
+Never put secret values in `.gitlab-ci.yml` or commit them to the repository.
+
+For the private API registry destination, add these three project variables:
+
+| Key | Value | Secret? |
+| --- | --- | --- |
+| `PRIVATE_REGISTRY` | Host only, e.g. `registry.example.com`; include a port if needed. Do not include `https://`. | No |
+| `PRIVATE_REGISTRY_USERNAME` | Registry user, e.g. `ci-builder` created with `registry user add ci-builder`. | Yes |
+| `PRIVATE_REGISTRY_PASSWORD` | Password for that registry user. | Yes |
+
+BuildKit uses `PRIVATE_REGISTRY_USERNAME` and `PRIVATE_REGISTRY_PASSWORD` for both the application image and the BuildKit cache because both are pushed to the same registry/repository. The account needs pull and push access. API-registry Basic Auth currently grants registry-wide access. For Harbor, use a Harbor robot account and set `PRIVATE_REGISTRY` to its host (including `:8443` if configured); Harbor project permissions apply to that account.
+
+If the Dockerfile pulls Docker Hub base images through this project's authenticated pull-through cache, add these additional variables in the same GitLab settings page. Use the cache-reader account created during cache setup; it is separate from `ci-builder`:
+
+| Key | Value | Secret? |
+| --- | --- | --- |
+| `DOCKERHUB_CACHE_REGISTRY` | Cache host only, e.g. `dockerhub-cache.example.com`. | No |
+| `DOCKERHUB_CACHE_USERNAME` | Cache-reader username from the cache setup. | Yes |
+| `DOCKERHUB_CACHE_PASSWORD` | Cache-reader password from `dockerhub-cache/credentials.txt`. | Yes |
+
+These cache credentials are only for pulling base images. The cache is not the destination for the app image or BuildKit cache. If the cache was installed with `--no-auth`, omit its username and password variables; the cache hostname is still needed in the Dockerfile and pipeline.
+
+To use GitLab's own Container Registry instead, no custom registry variables are needed: GitLab supplies `CI_REGISTRY`, `CI_REGISTRY_USER`, `CI_REGISTRY_PASSWORD`, and `CI_REGISTRY_IMAGE` to jobs when that feature is enabled. The sample below defaults to the API registry and uses BuildKit's registry cache exporter. Set `IMAGE_REGISTRY` to `gitlab` to publish to GitLab's registry instead. The first build may have no cache image yet; BuildKit can still build and publish it.
+
+For the Docker-in-Docker example, the GitLab Runner must use the Docker executor with privileged mode enabled for the job's `docker:dind` service. Configure the runner host so it can resolve and reach the registry/cache hostnames, and install the issuing CA certificate on the runner/DinD hosts if they use a private or self-signed TLS certificate. If the cache is on the Runner host and is not reachable via DNS, the existing `extra_hosts` configuration above can map its hostname to the host gateway. Use a trusted certificate in production.
+
+`scripts/install-buildkit.sh` creates a builder for the Docker user and Docker daemon where you run it. It does not create GitLab variables or configure a GitLab account. In a Docker-in-Docker CI job, create the job's builder with `docker buildx create` as shown below. Add the private registry username/password under **Project → Settings → CI/CD → Variables**; the job runs `docker login` with those variables before invoking `docker buildx build`, and BuildKit uses that login to push the image and registry cache. For a runner that uses a shared host Docker daemon instead of Docker-in-Docker, run the installer as the runner's Docker user and make sure the job uses that same daemon and builder.
 
 ```yaml
 stages:
@@ -938,8 +979,9 @@ stages:
 variables:
   DOCKER_HOST: tcp://docker:2375
   DOCKER_TLS_CERTDIR: ""
-  CACHE_REGISTRY: dockerhub-cache.example.com
-  IMAGE_TAG: $CI_REGISTRY_IMAGE:$CI_COMMIT_SHA
+  DOCKER_BUILDKIT: "1"
+  IMAGE_REGISTRY: private
+  IMAGE_REPOSITORY: team/app
 
 build-image:
   image: docker:27
@@ -947,19 +989,30 @@ build-image:
     - name: docker:27-dind
       command: ["--tls=false"]
   script:
-    - echo "$DOCKERHUB_CACHE_PASSWORD" | docker login "$CACHE_REGISTRY" --username "$DOCKERHUB_CACHE_USERNAME" --password-stdin
-    - echo "$CI_REGISTRY_PASSWORD" | docker login "$CI_REGISTRY" --username "$CI_REGISTRY_USER" --password-stdin
-    - docker build --pull -t "$IMAGE_TAG" .
-    - docker push "$IMAGE_TAG"
+    - |
+      if [ "$IMAGE_REGISTRY" = "gitlab" ]; then
+        IMAGE_NAME="$CI_REGISTRY_IMAGE"
+        printf '%s' "$CI_REGISTRY_PASSWORD" | docker login "$CI_REGISTRY" --username "$CI_REGISTRY_USER" --password-stdin
+      else
+        IMAGE_NAME="$PRIVATE_REGISTRY/$IMAGE_REPOSITORY"
+        printf '%s' "$PRIVATE_REGISTRY_PASSWORD" | docker login "$PRIVATE_REGISTRY" --username "$PRIVATE_REGISTRY_USERNAME" --password-stdin
+      fi
+    - |
+      if [ -n "${DOCKERHUB_CACHE_USERNAME:-}" ]; then
+        printf '%s' "$DOCKERHUB_CACHE_PASSWORD" | docker login "$DOCKERHUB_CACHE_REGISTRY" --username "$DOCKERHUB_CACHE_USERNAME" --password-stdin
+      fi
+    - docker buildx create --name ci-builder --driver docker-container --use
+    - docker buildx inspect --bootstrap
+    - docker buildx build --pull --tag "$IMAGE_NAME:$CI_COMMIT_SHA" --cache-from "type=registry,ref=$IMAGE_NAME:buildcache" --cache-to "type=registry,ref=$IMAGE_NAME:buildcache,mode=max" --push .
 ```
 
-Set the Dockerfile base image to the cache hostname so Docker actually uses it:
+Set the Dockerfile base image to the same hostname as `DOCKERHUB_CACHE_REGISTRY` so BuildKit actually uses the cache (replace the example hostname):
 
 ```dockerfile
 FROM dockerhub-cache.example.com/library/alpine:3.22
 ```
 
-Do not push private application images to `dockerhub-cache.example.com`; it is a pull-through cache for upstream Docker Hub images, not the private application-image destination.
+Do not push private application images to `dockerhub-cache.example.com`; it is a pull-through cache for upstream Docker Hub images, not the private application-image destination. The registry cache artifact is stored under the image repository's `buildcache` tag, so the same registry credentials need pull and push access there.
 
 For Docker Engine’s global Docker Hub mirror behavior, configure each Docker host separately in `/etc/docker/daemon.json`:
 
