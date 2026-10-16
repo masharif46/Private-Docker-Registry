@@ -808,7 +808,14 @@ When authentication is enabled, cache-reader credentials are saved in `dockerhub
 
 #### Manage Docker Hub cache users (authenticated mode)
 
-Cache users are local Basic Authentication users and are separate from API-registry and Harbor users. These commands apply only when authentication is enabled. Create or update a cache user with an interactive hidden password prompt:
+Cache users are local Basic Authentication users and are separate from API-registry and Harbor users. These steps apply only when cache authentication is enabled. Run them from the repository directory on the cache server. First back up the user file:
+
+```bash
+cp dockerhub-cache/auth/htpasswd \
+  "dockerhub-cache/auth/htpasswd.$(date -u +%Y%m%dT%H%M%SZ).bak"
+```
+
+To **add** a user, replace `developer` with the username you want. The command prompts for a password without displaying it. Do not add `-c`; that would replace the file and remove existing users.
 
 ```bash
 docker run --rm -it \
@@ -816,7 +823,21 @@ docker run --rm -it \
   -v "$PWD/dockerhub-cache/auth:/auth" \
   httpd:2-alpine \
   -B /auth/htpasswd developer
+```
 
+To **change a user's password**, run the same command again with that existing username. Enter the new password at the prompt:
+
+```bash
+docker run --rm -it \
+  --entrypoint htpasswd \
+  -v "$PWD/dockerhub-cache/auth:/auth" \
+  httpd:2-alpine \
+  -B /auth/htpasswd developer
+```
+
+After adding or changing the user, restore file permissions and restart the cache so it reloads the updated user file:
+
+```bash
 sudo chown "$USER:$USER" dockerhub-cache/auth/htpasswd
 sudo chmod 600 dockerhub-cache/auth/htpasswd
 docker compose \
@@ -825,7 +846,9 @@ docker compose \
   restart
 ```
 
-Test the new account with `docker login dockerhub-cache.example.com`. To remove a cache user, back up the authentication file first, then run:
+Test the account with `docker login dockerhub-cache.example.com`. If GitLab uses this account, set or update both `DOCKERHUB_CACHE_USERNAME` and `DOCKERHUB_CACHE_PASSWORD` in the GitLab project variables. Update any Kubernetes pull secrets if their credentials changed. Adding or changing users in `htpasswd` does not update `dockerhub-cache/credentials.txt`; that file only records the installer credentials, so update it securely if you use it as your password record.
+
+To remove a cache user, back up the authentication file first as above, then run:
 
 ```bash
 cp dockerhub-cache/auth/htpasswd \
